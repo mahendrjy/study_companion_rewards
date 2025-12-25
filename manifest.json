@@ -1,0 +1,25 @@
+{
+  "name": "study_companion_rewards",
+  "title": "Study Companion — Rewards",
+  "version": "0.1.0",
+  "description": "Displays a random reward image when a card is shown to provide small motivational rewards during review. Images are loaded from a folder inside your Anki `collection.media` directory. Behavior (image folder, display frequency, and styling) is configurable via `config.json`.",
+  "author": "Mahendra Choudhary",
+  "homepage": "https://github.com/mahendrjy/study_companion_rewards",
+  "license": "MIT",
+  "min_anki_version": "2.1.70",
+  "max_anki_version": null,
+  "tested_anki_versions": [
+    "25.09.2 (2.1.70)"
+  ],
+  "requirements": [],
+  "entry_point": "__init__.py",
+  "config_file": "config.json",
+  "tags": [
+    "anki",
+    "addon",
+    "images",
+    "study",
+    "rewards"
+  ],
+  "notes": "Report issues at the project homepage."
+}
