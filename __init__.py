@@ -14,7 +14,14 @@ Main entry point that registers hooks and initializes the add-on.
 from aqt import gui_hooks, mw
 
 from .config_manager import get_config
-from .image_manager import delete_image_file
+from .image_manager import (
+    delete_image_file,
+    increment_click_count,
+    sanitize_folder_name,
+    get_media_subfolder_path,
+)
+from urllib.parse import unquote as urlunquote
+from .image_manager import _load_meta, _save_meta
 from .ui_manager import register_config_action, register_tools_menu
 from .audio_manager import setup_audio_player
 from .features import inject_random_image
@@ -51,6 +58,19 @@ def _handle_webview_message(handled, message, context):
                 except Exception:
                     pass
         return (True, None)
+    # favorite/blacklist features removed
+    if isinstance(message, str) and message.startswith("randomImageClicked:"):
+        filename = message[len("randomImageClicked:"):]
+        cfg = get_config()
+        folder_name = sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
+        image_folder = get_media_subfolder_path(folder_name)
+        if image_folder:
+            try:
+                increment_click_count(image_folder, filename)
+            except Exception:
+                pass
+        return (True, None)
+    # video feature removed
     return handled
 
 
@@ -81,3 +101,5 @@ gui_hooks.card_will_show.append(inject_random_image)
 
 # Handle delete image messages from JavaScript
 gui_hooks.webview_did_receive_js_message.append(_handle_webview_message)
+
+# Behavior/session hooks removed

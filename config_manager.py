@@ -17,6 +17,11 @@ def get_defaults() -> dict:
         "folder_name": "study_companion_images",
         "max_width_percent": 80,
         "max_height_vh": 60,
+        "max_height_unit": "vh",
+        # Whether to use custom width and/or height values from settings
+        "use_custom_width": False,
+        "use_custom_height": False,
+        "click_open_fullscreen": True,
         "avoid_repeat": True,
         "show_motivation_quotes": True,
         "images_to_show": 1,
@@ -28,6 +33,9 @@ def get_defaults() -> dict:
         # Background audio (optional)
         "audio_file_path": "",
         "audio_volume": 50,
+        # Orientation-aware single-image display
+        "auto_orient_single_image": True,
+        # (video feature removed)
     }
 
 

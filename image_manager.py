@@ -18,6 +18,8 @@ _cycle_known_set: set[str] = set()
 _cycle_remaining: list[str] = []
 _cycle_state_path: str | None = None
 _last_filename: str | None = None
+_meta_filename = ".study_companion_meta.json"
+_cache_dirname = ".study_companion_cache"
 
 
 def _load_cycle_state(state_path: str):
@@ -163,18 +165,22 @@ def pick_random_image_filenames(cfg: dict, count: int) -> list[str] | None:
                 _cycle_known_set, _cycle_remaining = _load_cycle_state(state_path)
                 _cycle_state_path = state_path
 
-            if not _cycle_remaining or files_set != _cycle_known_set:
-                already_seen = _cycle_known_set - set(_cycle_remaining)
-                already_seen &= files_set
+            files_set = set(files)
+            state_path = os.path.join(image_folder, ".study_companion_cycle.json")
 
-                remaining_candidates = list(files_set - already_seen)
-                if not remaining_candidates:
-                    remaining_candidates = list(files_set)
-                random.shuffle(remaining_candidates)
+            # Load persisted state if folder changed
+            if _cycle_state_path != state_path:
+                _cycle_known_set, _cycle_remaining = _load_cycle_state(state_path)
+                _cycle_state_path = state_path
 
+            # If file set changed or we have no remaining, (re)initialize remaining as a shuffled list
+            if files_set != _cycle_known_set or not _cycle_remaining:
                 _cycle_known_set = files_set
-                _cycle_remaining = remaining_candidates
+                _cycle_remaining = list(files_set)
+                random.shuffle(_cycle_remaining)
 
+            # Pop items from remaining until we have enough; when remaining empties,
+            # reshuffle a fresh cycle (duplicates only after full cycle completed)
             while len(result) < count:
                 if not _cycle_remaining:
                     _cycle_remaining = list(_cycle_known_set)
@@ -197,3 +203,144 @@ def pick_random_image_filenames(cfg: dict, count: int) -> list[str] | None:
     except Exception as e:
         print(f"[StudyCompanion] Error while picking images: {e}")
         return None
+
+
+def _meta_path(image_folder: str) -> str:
+    return os.path.join(image_folder, _meta_filename)
+
+
+def _cache_path(image_folder: str) -> str:
+    return os.path.join(image_folder, _cache_dirname)
+
+
+def _load_meta(image_folder: str) -> dict:
+    path = _meta_path(image_folder)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    # ensure keys
+    data.setdefault("favorites", [])
+    data.setdefault("blacklist", [])
+    data.setdefault("view_counts", {})
+    data.setdefault("click_counts", {})
+    return data
+
+
+def _save_meta(image_folder: str, data: dict) -> None:
+    path = _meta_path(image_folder)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[StudyCompanion] Failed to save meta: {e}")
+
+
+def mark_favorite(image_folder: str, filename: str, favorite: bool) -> bool:
+    try:
+        meta = _load_meta(image_folder)
+        fav = set(meta.get("favorites", []))
+        if favorite:
+            fav.add(filename)
+        else:
+            fav.discard(filename)
+        meta["favorites"] = list(fav)
+        _save_meta(image_folder, meta)
+        return True
+    except Exception as e:
+        print(f"[StudyCompanion] mark_favorite error: {e}")
+        return False
+
+
+def mark_blacklist(image_folder: str, filename: str, blacklisted: bool) -> bool:
+    try:
+        meta = _load_meta(image_folder)
+        bl = set(meta.get("blacklist", []))
+        if blacklisted:
+            bl.add(filename)
+        else:
+            bl.discard(filename)
+        meta["blacklist"] = list(bl)
+        _save_meta(image_folder, meta)
+        return True
+    except Exception as e:
+        print(f"[StudyCompanion] mark_blacklist error: {e}")
+        return False
+
+
+def increment_view_count(image_folder: str, filename: str, delta: int = 1) -> None:
+    try:
+        meta = _load_meta(image_folder)
+        vc = meta.get("view_counts", {})
+        vc[filename] = int(vc.get(filename, 0)) + int(delta)
+        meta["view_counts"] = vc
+        _save_meta(image_folder, meta)
+    except Exception as e:
+        print(f"[StudyCompanion] increment_view_count error: {e}")
+
+
+def increment_click_count(image_folder: str, filename: str, delta: int = 1) -> None:
+    try:
+        meta = _load_meta(image_folder)
+        cc = meta.get("click_counts", {})
+        cc[filename] = int(cc.get(filename, 0)) + int(delta)
+        meta["click_counts"] = cc
+        _save_meta(image_folder, meta)
+    except Exception as e:
+        print(f"[StudyCompanion] increment_click_count error: {e}")
+
+
+def get_prioritized_files(image_folder: str, files: list[str]) -> list[str]:
+    """Return files filtered (remove blacklisted) and with favorites prioritized.
+    Favorites are moved to the front; within groups order is preserved.
+    """
+    try:
+        meta = _load_meta(image_folder)
+        fav = set(meta.get("favorites", []))
+        bl = set(meta.get("blacklist", []))
+        filtered = [f for f in files if f not in bl]
+        favorites = [f for f in filtered if f in fav]
+        others = [f for f in filtered if f not in fav]
+        return favorites + others
+    except Exception as e:
+        print(f"[StudyCompanion] get_prioritized_files error: {e}")
+        return files
+
+
+def ensure_optimized_copy(image_folder: str, filename: str) -> str:
+    """Return a relative path to an optimized copy (in cache) if created, otherwise return original filename.
+    Attempts to create a scaled WebP copy (if Pillow available) to reduce size. Falls back to original.
+    """
+    try:
+        src_path = os.path.join(image_folder, filename)
+        cache_dir = _cache_path(image_folder)
+        os.makedirs(cache_dir, exist_ok=True)
+        # create safe cache name
+        safe_name = filename.replace("/", "__") + ".webp"
+        cache_path = os.path.join(cache_dir, safe_name)
+        rel_cache = os.path.relpath(cache_path, image_folder).replace("\\", "/")
+        if os.path.exists(cache_path):
+            return rel_cache
+        try:
+            from PIL import Image as PILImage
+        except Exception:
+            return filename
+
+        with PILImage.open(src_path) as im:
+            # convert/resize: limit max dimension to 1600px
+            max_dim = 1600
+            w, h = im.size
+            scale = min(1.0, float(max_dim) / max(w, h))
+            if scale < 1.0:
+                new_size = (int(w * scale), int(h * scale))
+                im = im.resize(new_size, PILImage.LANCZOS)
+            im.save(cache_path, format="WEBP", quality=75)
+        return rel_cache
+    except Exception as e:
+        print(f"[StudyCompanion] ensure_optimized_copy error: {e}")
+        return filename
