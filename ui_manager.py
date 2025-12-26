@@ -9,6 +9,7 @@ from aqt.qt import (
     QCheckBox, QLineEdit, QSpinBox, QPushButton, QComboBox,
     QDialogButtonBox, QLabel, QWidget, qconnect, QTabWidget,
     QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QScrollArea, QTextEdit,
+    QSlider, Qt,
 )
 from .config_manager import get_config, write_config, get_defaults
 from .image_manager import open_images_folder, sanitize_folder_name
@@ -48,7 +49,7 @@ def _folder_audio_files(folder: str) -> List[str]:
 
 
 class SettingsDialog(QDialog):
-    """Settings dialog for StudyCompanion add-on with three playlists and quotes editor."""
+    """Settings dialog for StudyCompanion add-on."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -245,58 +246,33 @@ class SettingsDialog(QDialog):
         audio_layout.addLayout(audio_form)
 
         # Volume
-        self.sp_volume = QSpinBox()
-        self.sp_volume.setRange(0, 100)
-        self.sp_volume.setValue(int(self.cfg.get("audio_volume", 50) or 50))
-        self.sp_volume.setSuffix(" %")
-        audio_form.addRow("Audio volume:", self.sp_volume)
+        self.sl_volume = QSlider(Qt.Orientation.Horizontal)
+        self.sl_volume.setRange(0, 100)
+        self.sl_volume.setValue(int(self.cfg.get("audio_volume", 50) or 50))
+        self.lbl_volume = QLabel(f"{self.sl_volume.value()} %")
 
-        info = QLabel(
-            "Audio (simple 2-playlist schedule):\n\n"
-            "- Playlist 1: plays all day on days when Playlist 2 is NOT scheduled.\n"
-            "- Playlist 2: plays all day on scheduled play days (e.g., every other day for 21 days, then 5-day break).\n\n"
-            "Tip: To make a playlist play all day, enable 'Loop forever' for that playlist."
-        )
-        info.setWordWrap(True)
-        audio_layout.addWidget(info)
+        qconnect(self.sl_volume.valueChanged, lambda v: self.lbl_volume.setText(f"{int(v)} %"))
 
-        self.cb_program_enabled = QCheckBox("Enable Playlist 2 schedule (alternate days for 21 days, then 5-day break)")
-        audio_form.addRow(self.cb_program_enabled)
+        vol_row = QWidget()
+        vol_row_l = QHBoxLayout(vol_row)
+        vol_row_l.setContentsMargins(0, 0, 0, 0)
+        vol_row_l.addWidget(self.sl_volume, 1)
+        vol_row_l.addWidget(self.lbl_volume)
+        audio_form.addRow("Audio volume", vol_row)
 
-        self.lbl_cycle_status = QLabel("")
-        self.lbl_cycle_status.setWordWrap(True)
-        audio_layout.addWidget(self.lbl_cycle_status)
+        self.le_audio_source = QLineEdit()
+        self.btn_audio_folder = QPushButton("Folder…")
+        self.cb_audio_loop = QCheckBox("Loop all day")
 
-        self.btn_cycle_reset = QPushButton("Clear cycle counters")
-        qconnect(self.btn_cycle_reset.clicked, self._on_clear_cycle)
-        audio_layout.addWidget(self.btn_cycle_reset)
+        src_row = QWidget()
+        src_row_l = QHBoxLayout(src_row)
+        src_row_l.setContentsMargins(0, 0, 0, 0)
+        src_row_l.addWidget(self.le_audio_source, 1)
+        src_row_l.addWidget(self.btn_audio_folder)
+        audio_form.addRow("Playlist source", src_row)
+        audio_form.addRow("Loop", self.cb_audio_loop)
 
-        self.audio_sources: dict[int, dict] = {}
-        for i in (1, 2):
-            le = QLineEdit()
-            btn_folder = QPushButton("Folder…")
-
-            cb_loop = QCheckBox("Loop all day")
-
-            row = QWidget()
-            row_l = QHBoxLayout(row)
-            row_l.setContentsMargins(0, 0, 0, 0)
-            row_l.addWidget(le, 1)
-            row_l.addWidget(btn_folder)
-
-            label = "Playlist 1 (every day) source" if i == 1 else "Playlist 2 (scheduled) source"
-            audio_form.addRow(label, row)
-
-            audio_form.addRow(f"Playlist {i} loop", cb_loop)
-
-            self.audio_sources[i] = {
-                "le": le,
-                "btn_folder": btn_folder,
-                "cb_loop": cb_loop,
-            }
-            qconnect(btn_folder.clicked, lambda _, idx=i: self._browse_audio_folder(idx))
-
-        qconnect(self.cb_program_enabled.stateChanged, lambda _: self._on_program_toggle())
+        qconnect(self.btn_audio_folder.clicked, self._browse_audio_folder)
 
         # Quotes tab
         tab_quotes = QWidget()
@@ -387,31 +363,24 @@ class SettingsDialog(QDialog):
         self.cb_website_mode.setChecked(str(cfg.get("website_display_mode", "mobile")).lower() == "mobile")
         self.sp_site_w.setValue(int(cfg.get("website_width_percent", 100) or 100))
 
-        self.sp_volume.setValue(int(cfg.get("audio_volume", 50) or 50))
+        self.sl_volume.setValue(int(cfg.get("audio_volume", 50) or 50))
+        self.lbl_volume.setText(f"{int(self.sl_volume.value())} %")
 
-        self.cb_program_enabled.setChecked(bool(cfg.get("audio_program_enabled", False)))
+        val = str(cfg.get("audio_playlist_1_path", "") or "").strip()
+        if not val:
+            val = str(cfg.get("audio_file_path", "") or "").strip()
+        self.le_audio_source.setText(val)
+        self.cb_audio_loop.setChecked(bool(cfg.get("audio_loop_1", False) or cfg.get("audio_loop_playlist", False)))
 
-        self._on_program_toggle()
-        self._refresh_cycle_status()
-
-        # new sources, with fallback to legacy audio_file_path
-        for i in (1, 2):
-            key = f"audio_playlist_{i}_path"
-            val = str(cfg.get(key, "") or "").strip()
-            if not val and i == 1:
-                val = str(cfg.get("audio_file_path", "") or "").strip()
-            self.audio_sources[i]["le"].setText(val)
-            self.audio_sources[i]["cb_loop"].setChecked(bool(cfg.get(f"audio_loop_{i}", False)))
-
-    def _browse_audio_folder(self, idx: int) -> None:
+    def _browse_audio_folder(self) -> None:
         try:
             folder = QFileDialog.getExistingDirectory(
                 self,
-                f"Select folder for Playlist {idx}",
+                "Select folder for playlist",
                 os.path.expanduser("~"),
             )
             if folder:
-                self.audio_sources[idx]["le"].setText(folder)
+                self.le_audio_source.setText(folder)
         except Exception:
             pass
 
@@ -447,21 +416,21 @@ class SettingsDialog(QDialog):
                 "quotes_font_size_em": float(self.sp_quote_size.value()) / 10.0,
                 "quotes_italic": bool(self.cb_quote_italic.isChecked()),
                 "quotes_align": str(self.cb_quote_align.currentData() or "left"),
-                "audio_volume": int(self.sp_volume.value()),
-                "audio_program_enabled": bool(self.cb_program_enabled.isChecked()),
-                # Fixed schedule (kept in config for status display/backwards compat)
-                "audio_program_active_days": 21,
-                "audio_program_break_days": 5,
+                "audio_volume": int(self.sl_volume.value()),
             }
         )
 
-        # Program mode always uses cycle tracking (day counters)
-        if bool(cfg.get("audio_program_enabled", False)):
-            cfg["audio_cycle_enabled"] = True
+        cfg["audio_playlist_1_path"] = str(self.le_audio_source.text() or "").strip()
+        cfg["audio_loop_1"] = bool(self.cb_audio_loop.isChecked())
 
-        for i in (1, 2):
-            cfg[f"audio_playlist_{i}_path"] = str(self.audio_sources[i]["le"].text() or "").strip()
-            cfg[f"audio_loop_{i}"] = bool(self.audio_sources[i]["cb_loop"].isChecked())
+        # Explicitly disable/clear removed Playlist 2 + schedule/cycle settings if they exist.
+        cfg["audio_playlist_2_path"] = ""
+        cfg["audio_loop_2"] = False
+        cfg["audio_program_enabled"] = False
+        cfg["audio_cycle_enabled"] = False
+        cfg["audio_cycle_day"] = 1
+        cfg["audio_cycle_count"] = 0
+        cfg["audio_cycle_last_date"] = ""
 
         write_config(cfg)
         try:
@@ -469,46 +438,6 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
         self.accept()
-
-    def _refresh_cycle_status(self) -> None:
-        cfg = self.cfg
-        program = bool(cfg.get("audio_program_enabled", False))
-        day = int(cfg.get("audio_cycle_day", 1) or 1)
-        cycles = int(cfg.get("audio_cycle_count", 0) or 0)
-        last = str(cfg.get("audio_cycle_last_date", "") or "").strip()
-        if program:
-            active_days = 21
-            break_days = 5
-            total = active_days + break_days
-
-            if day > active_days:
-                phase = "Break"
-                today_action = "Playlist 2: OFF (break)"
-            else:
-                phase = "Active"
-                is_play = (day % 2) == 1
-                today_action = "Playlist 2: ON" if is_play else "Playlist 2: OFF"
-
-            self.lbl_cycle_status.setText(
-                f"Schedule is ON. Cycle day: {day}/{total} ({phase}; {today_action}). Cycles completed: {cycles}. Last advanced on: {last or '—'}."
-            )
-            return
-
-        self.lbl_cycle_status.setText("Schedule is OFF. Playlist 1 will play when enabled.")
-
-    def _on_program_toggle(self) -> None:
-        # Only refresh the status label; schedule parameters are fixed.
-        self._refresh_cycle_status()
-
-    def _on_clear_cycle(self) -> None:
-        try:
-            write_config({"audio_cycle_day": 1, "audio_cycle_count": 0, "audio_cycle_last_date": ""})
-            self.cfg["audio_cycle_day"] = 1
-            self.cfg["audio_cycle_count"] = 0
-            self.cfg["audio_cycle_last_date"] = ""
-            self._refresh_cycle_status()
-        except Exception:
-            pass
 
     def _on_pick_image_folder(self) -> None:
         try:
@@ -582,14 +511,10 @@ class SettingsDialog(QDialog):
                 break
 
         # Audio
-        self.sp_volume.setValue(int(d.get("audio_volume", 50) or 50))
-        self.cb_program_enabled.setChecked(bool(d.get("audio_program_enabled", False)))
-
-        for i in (1, 2):
-            self.audio_sources[i]["le"].setText("")
-            self.audio_sources[i]["cb_loop"].setChecked(bool(d.get(f"audio_loop_{i}", False)))
-
-        self._on_program_toggle()
+        self.sl_volume.setValue(int(d.get("audio_volume", 50) or 50))
+        self.lbl_volume.setText(f"{int(self.sl_volume.value())} %")
+        self.le_audio_source.setText("")
+        self.cb_audio_loop.setChecked(bool(d.get("audio_loop_1", False) or d.get("audio_loop_playlist", False)))
 
     # Quotes UI handlers
     def _load_quotes_ui(self):

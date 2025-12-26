@@ -43,26 +43,10 @@ def get_defaults() -> dict:
         "audio_file_path": "",
         "audio_playlist": [],
         "audio_loop_playlist": False,
-        # Two playlists (file or folder source)
+        # Single playlist (file or folder source)
         "audio_playlist_1": [],
-        "audio_playlist_2": [],
         "audio_playlist_1_path": "",
-        "audio_playlist_2_path": "",
         "audio_loop_1": False,
-        "audio_loop_2": False,
-
-        # Program schedule (more customizable play/rest + active/break + pattern)
-        # When enabled, the add-on uses the cycle counters to track calendar days in the program.
-        "audio_program_enabled": False,
-        "audio_program_active_days": 21,
-        "audio_program_break_days": 5,
-
-        # 21-day + 5-day break cycle tracking (optional)
-        "audio_cycle_enabled": False,
-        "audio_cycle_day": 1,
-        "audio_cycle_count": 0,
-        "audio_cycle_last_date": "",
-        "audio_last_played_date": "",
         "audio_volume": 50,
         # Orientation-aware single-image display
         "auto_orient_single_image": True,
