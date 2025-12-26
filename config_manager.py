@@ -22,6 +22,10 @@ def get_defaults() -> dict:
         "use_custom_width": False,
         "use_custom_height": False,
         "click_open_fullscreen": True,
+        # Image appearance
+        "images_max_columns": 3,
+        "images_grid_gap_px": 8,
+        "image_corner_radius_px": 8,
         "avoid_repeat": True,
         "show_motivation_quotes": True,
         "images_to_show": 1,
@@ -30,12 +34,38 @@ def get_defaults() -> dict:
         "website_height_vh": 80,
         "website_display_mode": "mobile",  # "desktop" or "mobile"
         "website_width_percent": 100,  # width for mobile mode
+        "website_border_radius_px": 4,
+        # Quote appearance
+        "quotes_font_size_em": 0.9,
+        "quotes_italic": True,
+        "quotes_align": "left",  # left|center
         # Background audio (optional)
         "audio_file_path": "",
+        "audio_playlist": [],
+        "audio_loop_playlist": False,
+        # Two playlists (file or folder source)
+        "audio_playlist_1": [],
+        "audio_playlist_2": [],
+        "audio_playlist_1_path": "",
+        "audio_playlist_2_path": "",
+        "audio_loop_1": False,
+        "audio_loop_2": False,
+
+        # Program schedule (more customizable play/rest + active/break + pattern)
+        # When enabled, the add-on uses the cycle counters to track calendar days in the program.
+        "audio_program_enabled": False,
+        "audio_program_active_days": 21,
+        "audio_program_break_days": 5,
+
+        # 21-day + 5-day break cycle tracking (optional)
+        "audio_cycle_enabled": False,
+        "audio_cycle_day": 1,
+        "audio_cycle_count": 0,
+        "audio_cycle_last_date": "",
+        "audio_last_played_date": "",
         "audio_volume": 50,
         # Orientation-aware single-image display
         "auto_orient_single_image": True,
-        # (video feature removed)
     }
 
 

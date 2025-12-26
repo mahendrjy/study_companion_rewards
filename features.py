@@ -51,19 +51,15 @@ def inject_random_image(text: str, card, kind: str) -> str:
     if is_new_card:
         _current_card_id = card_id
 
-    # Prepare website and video settings early so they can be used even when images list is empty
+    # Prepare website settings early so it can be used even when images list is empty
     website_url = str(cfg.get("website_url", "")).strip()
     website_display_mode = str(cfg.get("website_display_mode", "mobile")).lower()
-
-    # video feature removed
 
     images_count = int(cfg.get("images_to_show", 1) or 1)
     filenames = pick_random_image_filenames(cfg, images_count)
     # Ensure filenames is iterable even if picker returned None
     if not filenames:
         filenames = []
-
-    # video feature removed
 
     # behavior/emotion features removed
 
@@ -76,6 +72,24 @@ def inject_random_image(text: str, card, kind: str) -> str:
     website_url = str(cfg.get("website_url", "")).strip()
     website_display_mode = str(cfg.get("website_display_mode", "mobile")).lower()
     show_quotes = cfg.get("show_motivation_quotes", True)
+
+    max_columns = int(cfg.get("images_max_columns", 3) or 3)
+    if max_columns < 1:
+        max_columns = 1
+    if max_columns > 6:
+        max_columns = 6
+
+    gap_px = int(cfg.get("images_grid_gap_px", 8) or 8)
+    if gap_px < 0:
+        gap_px = 0
+    if gap_px > 48:
+        gap_px = 48
+
+    radius_px = int(cfg.get("image_corner_radius_px", 8) or 8)
+    if radius_px < 0:
+        radius_px = 0
+    if radius_px > 48:
+        radius_px = 48
     
     total_items_needing_quotes = images_count
     if website_url and website_display_mode == "mobile":
@@ -85,7 +99,7 @@ def inject_random_image(text: str, card, kind: str) -> str:
     quote_index = 0
 
     images_cells = []
-    columns = min(3, max(1, images_count))
+    columns = min(max_columns, max(1, images_count))
     cell_width_css = f"calc({100/columns:.4f}% - 12px)"
     
     # increment view counts for selected filenames
@@ -100,8 +114,6 @@ def inject_random_image(text: str, card, kind: str) -> str:
     except Exception:
         image_folder_path = ""
 
-    # video feature removed
-
     for idx, fname in enumerate(filenames):
         # Insert website in mobile mode after first image
         if website_url and website_display_mode == "mobile" and idx == 0:
@@ -109,8 +121,6 @@ def inject_random_image(text: str, card, kind: str) -> str:
             if website_cell:
                 images_cells.append(website_cell)
                 quote_index += 1
-
-        # video feature removed
 
         # prefer optimized cached copy if available
         rel_src = fname
@@ -158,7 +168,7 @@ def inject_random_image(text: str, card, kind: str) -> str:
             img_style_parts.append("object-fit:cover")
 
         img_style_parts.append("object-position:center")
-        img_style_parts.append("border-radius:8px")
+        img_style_parts.append(f"border-radius:{radius_px}px")
         img_style_parts.append("display:block")
         img_style = "; ".join(img_style_parts)
 
@@ -179,7 +189,7 @@ def inject_random_image(text: str, card, kind: str) -> str:
         )
         images_cells.append(cell_html)
 
-    # If there were no images, provide mobile-mode fallbacks for website/video
+    # If there were no images, provide mobile-mode fallback for website
     if not filenames:
         # mobile website cell
         if website_url and website_display_mode == "mobile":
@@ -188,17 +198,10 @@ def inject_random_image(text: str, card, kind: str) -> str:
                 images_cells.append(website_cell)
                 quote_index += 1
 
-        # video feature removed
-
     # Desktop mode: inject website above images
     website_html = ""
     if website_url and website_display_mode == "desktop":
         website_html = _build_desktop_website(cfg, show_quotes)
-    # Desktop video: inject video above images alongside website
-    # video feature removed
-    video_html = ""
-    # place video_html before website_html
-    website_html = video_html + website_html
 
     # whether click-to-fullscreen is enabled
     click_open = bool(cfg.get("click_open_fullscreen", True))
@@ -211,7 +214,7 @@ def inject_random_image(text: str, card, kind: str) -> str:
         website_html
         + "\n" +
         "<div style=\"text-align:center; margin-top:15px;\" id=\"random-image-container\">\n"
-        "  <div style=\"display:flex; flex-wrap:wrap; justify-content:center; gap:8px;\">\n"
+        "  <div style=\"display:flex; flex-wrap:wrap; justify-content:center; gap:" + str(gap_px) + "px;\">\n"
         + imgs_html +
         "\n  </div>\n</div>\n"
         + "<script>\n(function() {\n"
@@ -235,7 +238,7 @@ def inject_random_image(text: str, card, kind: str) -> str:
         "      overlay.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px;';\n"
         "      var img = document.createElement('img');\n"
         "      img.src = src;\n"
-        "      img.style.cssText = 'max-width:95%;max-height:95%;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.5);cursor:zoom-out;';\n"
+        "      img.style.cssText = 'max-width:95%;max-height:95%;border-radius:" + str(radius_px) + "px;box-shadow:0 6px 18px rgba(0,0,0,0.5);cursor:zoom-out;';\n"
         "      overlay.appendChild(img);\n"
         "      function removeOverlay() { try { if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay); document.removeEventListener('keydown', onKey); } catch (e) {} }\n"
         "      function onKey(ev) { if (ev.key === 'Escape') removeOverlay(); }\n"
@@ -306,9 +309,19 @@ def _build_quote_delete_row(show_quotes: bool, quote_index: int, quotes: list[st
 
     if show_quotes and quote_index < len(quotes):
         quote_text = html.escape(quotes[quote_index])
+        cfg = get_config()
+        fs = float(cfg.get("quotes_font_size_em", 0.9) or 0.9)
+        if fs < 0.6:
+            fs = 0.6
+        if fs > 2.0:
+            fs = 2.0
+        italic = "italic" if bool(cfg.get("quotes_italic", True)) else "normal"
+        align = str(cfg.get("quotes_align", "left") or "left")
+        if align not in ("left", "center"):
+            align = "left"
         return (
             '<div style="display:flex; align-items:flex-start; margin-top:8px; gap:4px;">'
-            '<div style="flex:1; font-size:0.9em; color:#fff; font-style:italic; text-align:left; line-height:1.3;">'
+            '<div style="flex:1; font-size:' + str(fs) + 'em; color:#fff; font-style:' + italic + '; text-align:' + align + '; line-height:1.3;">'
             + quote_text +
             '</div>'
             + delete_btn + fav_btn + bl_btn +
@@ -332,6 +345,11 @@ def _create_website_cell(cfg: dict, quote_index: int, quotes: list[str]) -> str:
     
     website_height_vh = int(cfg.get("website_height_vh", 50) or 50)
     website_width_percent = int(cfg.get("website_width_percent", 100) or 100)
+    website_radius_px = int(cfg.get("website_border_radius_px", 4) or 4)
+    if website_radius_px < 0:
+        website_radius_px = 0
+    if website_radius_px > 48:
+        website_radius_px = 48
     cell_width_css = f"calc(33.33% - 12px)"
     
     quote_text = ""
@@ -340,7 +358,7 @@ def _create_website_cell(cfg: dict, quote_index: int, quotes: list[str]) -> str:
     
     quote_delete_row = f"""
     <div style="display:flex; align-items:flex-start; margin-top:8px; gap:4px;">
-        <div style="flex:1; font-size:0.9em; color:#fff; font-style:italic; text-align:left; line-height:1.3;">
+        <div style="flex:1; font-size:{float(cfg.get('quotes_font_size_em', 0.9) or 0.9)}em; color:#fff; font-style:{'italic' if bool(cfg.get('quotes_italic', True)) else 'normal'}; text-align:{str(cfg.get('quotes_align', 'left') or 'left') if str(cfg.get('quotes_align', 'left') or 'left') in ('left','center') else 'left'}; line-height:1.3;">
             {quote_text}
         </div>
     </div>
@@ -352,7 +370,7 @@ def _create_website_cell(cfg: dict, quote_index: int, quotes: list[str]) -> str:
     <div id="persistent-website-container" style="width:{website_width_percent}%; margin:0 auto;">
         <iframe id="persistent-website-iframe" 
                 src="{html.escape(website_url, quote=True)}" 
-                style="width:100%; height:{website_height_vh}vh; border-radius:4px; display:block;"
+            style="width:100%; height:{website_height_vh}vh; border-radius:{website_radius_px}px; display:block;"
                 frameborder="0"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowfullscreen>
@@ -389,7 +407,7 @@ def _create_website_cell(cfg: dict, quote_index: int, quotes: list[str]) -> str:
                 var iframe = document.createElement('iframe');
                 iframe.id = 'persistent-website-iframe';
                 iframe.src = '{html.escape(website_url, quote=True).replace("'", "&#39;")}';
-                iframe.style.cssText = 'width:100%; height:{website_height_vh}vh; border-radius:4px; display:block;';
+                iframe.style.cssText = 'width:100%; height:{website_height_vh}vh; border-radius:{website_radius_px}px; display:block;';
                 iframe.setAttribute('frameborder', '0');
                 iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
                 iframe.setAttribute('allowfullscreen', '');
@@ -412,12 +430,26 @@ def _build_desktop_website(cfg: dict, show_quotes: bool) -> str:
     
     website_url = str(cfg.get("website_url", "")).strip()
     website_height_vh = int(cfg.get("website_height_vh", 50) or 50)
+    website_radius_px = int(cfg.get("website_border_radius_px", 4) or 4)
+    if website_radius_px < 0:
+        website_radius_px = 0
+    if website_radius_px > 48:
+        website_radius_px = 48
     
     desktop_website_quote = get_random_quote() if show_quotes else ""
     desktop_quote_html = ""
     if show_quotes and desktop_website_quote:
+        fs = float(cfg.get("quotes_font_size_em", 0.9) or 0.9)
+        if fs < 0.6:
+            fs = 0.6
+        if fs > 2.0:
+            fs = 2.0
+        italic = "italic" if bool(cfg.get("quotes_italic", True)) else "normal"
+        align = str(cfg.get("quotes_align", "left") or "left")
+        if align not in ("left", "center"):
+            align = "left"
         desktop_quote_html = f"""
-            <div style="margin-top:8px; font-size:0.9em; color:#fff; font-style:italic; text-align:left;">
+            <div style="margin-top:8px; font-size:{fs}em; color:#fff; font-style:{italic}; text-align:{align};">
                 {html.escape(desktop_website_quote)}
             </div>
             """
@@ -427,7 +459,7 @@ def _build_desktop_website(cfg: dict, show_quotes: bool) -> str:
 <div id="persistent-website-container" style="width:100%; margin-top:20px; margin-bottom:20px;">
     <iframe id="persistent-website-iframe" 
             src="{html.escape(website_url, quote=True)}" 
-            style="width:100%; height:{website_height_vh}vh; border:1px solid #ccc; border-radius:4px; display:block;"
+            style="width:100%; height:{website_height_vh}vh; border:1px solid #ccc; border-radius:{website_radius_px}px; display:block;"
             frameborder="0"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowfullscreen>
@@ -462,7 +494,7 @@ def _build_desktop_website(cfg: dict, show_quotes: bool) -> str:
             var iframe = document.createElement('iframe');
             iframe.id = 'persistent-website-iframe';
             iframe.src = '{html.escape(website_url, quote=True).replace("'", "&#39;")}';
-            iframe.style.cssText = 'width:100%; height:{website_height_vh}vh; border:1px solid #ccc; border-radius:4px; display:block;';
+            iframe.style.cssText = 'width:100%; height:{website_height_vh}vh; border:1px solid #ccc; border-radius:{website_radius_px}px; display:block;';
             iframe.setAttribute('frameborder', '0');
             iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture');
             iframe.setAttribute('allowfullscreen', '');

@@ -1,6 +1,6 @@
 """
 UI components for StudyCompanion add-on.
-Contains settings dialog and configuration interface.
+Contains settings dialog and configuration interface (General, Audio, Quotes).
 """
 
 from aqt import mw
@@ -8,24 +8,55 @@ from aqt.qt import (
     QAction, QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
     QCheckBox, QLineEdit, QSpinBox, QPushButton, QComboBox,
     QDialogButtonBox, QLabel, QWidget, qconnect, QTabWidget,
+    QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QScrollArea, QTextEdit,
 )
 from .config_manager import get_config, write_config, get_defaults
 from .image_manager import open_images_folder, sanitize_folder_name
 from .audio_manager import setup_audio_player
+from .quotes import get_all_quotes, save_quotes
 import os
-import shutil
-from aqt.qt import QFileDialog
+import re
+from typing import List
+
+try:
+    from aqt import mw as _mw
+except Exception:
+    _mw = None
+
+SUPPORTED_AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"}
+
+
+def _natural_key(text: str):
+    parts = re.split(r"(\d+)", text)
+    key = []
+    for p in parts:
+        if p.isdigit():
+            key.append(int(p))
+        else:
+            key.append(p.lower())
+    return key
+
+
+def _folder_audio_files(folder: str) -> List[str]:
+    try:
+        entries = os.listdir(folder)
+    except Exception:
+        return []
+    files = [os.path.join(folder, f) for f in entries if os.path.splitext(f)[1].lower() in SUPPORTED_AUDIO_EXTS]
+    files.sort(key=lambda p: _natural_key(os.path.basename(p)))
+    return files
 
 
 class SettingsDialog(QDialog):
-    """Settings dialog for StudyCompanion add-on."""
+    """Settings dialog for StudyCompanion add-on with three playlists and quotes editor."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("StudyCompanion Settings")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(720)
+        self.resize(760, 620)
 
-        cfg = get_config()
+        self.cfg = get_config()
 
         root = QVBoxLayout(self)
 
@@ -50,6 +81,18 @@ class SettingsDialog(QDialog):
         gen_form = QFormLayout()
         gen_layout.addLayout(gen_form)
 
+        self.cb_enabled = QCheckBox("Enable add-on")
+        self.cb_enabled.setChecked(bool(self.cfg.get("enabled", True)))
+        gen_form.addRow(self.cb_enabled)
+
+        self.cb_q = QCheckBox("Show on Question side")
+        self.cb_q.setChecked(bool(self.cfg.get("show_on_question", True)))
+        gen_form.addRow(self.cb_q)
+
+        self.cb_a = QCheckBox("Show on Answer side")
+        self.cb_a.setChecked(bool(self.cfg.get("show_on_answer", True)))
+        gen_form.addRow(self.cb_a)
+
         # Images tab
         tab_images = QWidget()
         tabs.addTab(tab_images, "Images")
@@ -57,79 +100,68 @@ class SettingsDialog(QDialog):
         img_form = QFormLayout()
         img_layout.addLayout(img_form)
 
-        # Website tab
-        tab_website = QWidget()
-        tabs.addTab(tab_website, "Website")
-        website_layout = QVBoxLayout(tab_website)
-        website_form = QFormLayout()
-        website_layout.addLayout(website_form)
-
-        # Audio tab
-        tab_audio = QWidget()
-        tabs.addTab(tab_audio, "Audio")
-        audio_layout = QVBoxLayout(tab_audio)
-        audio_form = QFormLayout()
-        audio_layout.addLayout(audio_form)
-
-        # enabled
-        self.cb_enabled = QCheckBox("Enable add-on")
-        self.cb_enabled.setChecked(bool(cfg.get("enabled", True)))
-        gen_form.addRow(self.cb_enabled)
-
-        # show_on_question / answer
-        self.cb_q = QCheckBox("Show on Question side")
-        self.cb_q.setChecked(bool(cfg.get("show_on_question", True)))
-        gen_form.addRow(self.cb_q)
-
-        self.cb_a = QCheckBox("Show on Answer side")
-        self.cb_a.setChecked(bool(cfg.get("show_on_answer", True)))
-        gen_form.addRow(self.cb_a)
-
-        # folder_name + open button
-        self.le_folder = QLineEdit(str(cfg.get("folder_name", "study_companion_images")))
+        self.le_folder = QLineEdit(str(self.cfg.get("folder_name", "study_companion_images")))
         self.le_folder.setPlaceholderText("study_companion_images")
-
+        btn_pick_img_folder = QPushButton("Select folder…")
         btn_open = QPushButton("Open folder")
+        qconnect(btn_pick_img_folder.clicked, self._on_pick_image_folder)
         qconnect(btn_open.clicked, self._on_open_folder)
-
         folder_row = QWidget()
         folder_layout = QHBoxLayout(folder_row)
         folder_layout.setContentsMargins(0, 0, 0, 0)
         folder_layout.addWidget(self.le_folder, 1)
+        folder_layout.addWidget(btn_pick_img_folder)
         folder_layout.addWidget(btn_open)
-
         img_form.addRow("Image folder (inside collection.media)", folder_row)
 
-        # max_width_percent
+        self.sp_count = QSpinBox()
+        self.sp_count.setRange(1, 12)
+        self.sp_count.setValue(int(self.cfg.get("images_to_show", 1) or 1))
+        img_form.addRow("Number of images to show", self.sp_count)
+
+        self.cb_avoid = QCheckBox("Don't repeat an image until all images have been shown")
+        self.cb_avoid.setChecked(bool(self.cfg.get("avoid_repeat", True)))
+        img_form.addRow(self.cb_avoid)
+
+        self.cb_quotes = QCheckBox("Show motivational quote below image")
+        self.cb_quotes.setChecked(bool(self.cfg.get("show_motivation_quotes", True)))
+        img_form.addRow(self.cb_quotes)
+
+        self.cb_auto_orient = QCheckBox("Auto-orient single image (portrait vs landscape)")
+        self.cb_auto_orient.setChecked(bool(self.cfg.get("auto_orient_single_image", True)))
+        img_form.addRow(self.cb_auto_orient)
+
+        self.cb_fullscreen = QCheckBox("Open image fullscreen on click (click to enlarge)")
+        self.cb_fullscreen.setChecked(bool(self.cfg.get("click_open_fullscreen", True)))
+        img_form.addRow(self.cb_fullscreen)
+
+        self.cb_use_custom_w = QCheckBox("Use custom max width from settings")
+        self.cb_use_custom_w.setChecked(bool(self.cfg.get("use_custom_width", False)))
+        img_form.addRow(self.cb_use_custom_w)
+
         self.sp_w = QSpinBox()
         self.sp_w.setRange(0, 100)
-        self.sp_w.setValue(int(cfg.get("max_width_percent", 100) or 0))
+        self.sp_w.setValue(int(self.cfg.get("max_width_percent", 80) or 0))
         self.sp_w.setSuffix(" %")
-        # option to use custom width/height values separately
-        self.cb_use_custom_w = QCheckBox("Use custom max width from settings")
-        self.cb_use_custom_w.setChecked(bool(cfg.get("use_custom_width", False)))
-        img_form.addRow(self.cb_use_custom_w)
-        self.cb_use_custom_h = QCheckBox("Use custom max height from settings")
-        self.cb_use_custom_h.setChecked(bool(cfg.get("use_custom_height", False)))
-        img_form.addRow(self.cb_use_custom_h)
         img_form.addRow("Max width", self.sp_w)
 
-        # max_height (value + unit) with explanation for 'vh'
+        self.cb_use_custom_h = QCheckBox("Use custom max height from settings")
+        self.cb_use_custom_h.setChecked(bool(self.cfg.get("use_custom_height", False)))
+        img_form.addRow(self.cb_use_custom_h)
+
         self.sp_h = QSpinBox()
         self.sp_h.setRange(0, 200)
-        self.sp_h.setValue(int(cfg.get("max_height_vh", 80) or 0))
+        self.sp_h.setValue(int(self.cfg.get("max_height_vh", 60) or 0))
 
         self.cb_h_unit = QComboBox()
         self.cb_h_unit.addItems(["vh", "%"])
-        current_unit = str(cfg.get("max_height_unit", "vh")).lower()
+        current_unit = str(self.cfg.get("max_height_unit", "vh")).lower()
         if current_unit not in ("vh", "%"):
             current_unit = "vh"
         self.cb_h_unit.setCurrentText(current_unit)
-        # apply initial suffix
         self.sp_h.setSuffix(" vh" if current_unit == "vh" else " %")
 
-        # update suffix when unit changes
-        def _on_unit_changed(text):
+        def _on_unit_changed(text: str):
             self.sp_h.setSuffix(" vh" if text == "vh" else " %")
 
         qconnect(self.cb_h_unit.currentTextChanged, _on_unit_changed)
@@ -141,220 +173,476 @@ class SettingsDialog(QDialog):
         height_layout.addWidget(self.cb_h_unit)
         img_form.addRow("Max height", height_row)
 
-        # short explanation for 'vh'
-        vh_explain = QLabel("Note: 'vh' = 1% of the viewport height (browser/window). Use '%' to size relative to the containing element.")
-        vh_explain.setWordWrap(True)
-        img_form.addRow(vh_explain)
+        self.sp_img_cols = QSpinBox()
+        self.sp_img_cols.setRange(1, 6)
+        self.sp_img_cols.setValue(int(self.cfg.get("images_max_columns", 3) or 3))
+        img_form.addRow("Max columns (grid)", self.sp_img_cols)
 
-        # images_to_show
-        self.sp_count = QSpinBox()
-        self.sp_count.setRange(1, 12)
-        self.sp_count.setValue(int(cfg.get("images_to_show", 1) or 1))
-        img_form.addRow("Number of images to show", self.sp_count)
+        self.sp_img_gap = QSpinBox()
+        self.sp_img_gap.setRange(0, 48)
+        self.sp_img_gap.setValue(int(self.cfg.get("images_grid_gap_px", 8) or 8))
+        self.sp_img_gap.setSuffix(" px")
+        img_form.addRow("Grid gap", self.sp_img_gap)
 
-        # avoid_repeat
-        self.cb_avoid = QCheckBox("Don't repeat an image until all images have been shown")
-        self.cb_avoid.setChecked(bool(cfg.get("avoid_repeat", True)))
-        img_form.addRow(self.cb_avoid)
+        self.sp_img_radius = QSpinBox()
+        self.sp_img_radius.setRange(0, 48)
+        self.sp_img_radius.setValue(int(self.cfg.get("image_corner_radius_px", 8) or 8))
+        self.sp_img_radius.setSuffix(" px")
+        img_form.addRow("Image corner radius", self.sp_img_radius)
 
+        # Website tab
+        tab_website = QWidget()
+        tabs.addTab(tab_website, "Website")
+        website_layout = QVBoxLayout(tab_website)
+        website_form = QFormLayout()
+        website_layout.addLayout(website_form)
 
-        # show motivational quotes
-        self.cb_quotes = QCheckBox("Show motivational quote below image")
-        self.cb_quotes.setChecked(bool(cfg.get("show_motivation_quotes", True)))
-        img_form.addRow(self.cb_quotes)
-
-        # orientation-aware single image display
-        self.cb_auto_orient = QCheckBox("Auto-orient single image (portrait vs landscape)")
-        self.cb_auto_orient.setChecked(bool(cfg.get("auto_orient_single_image", True)))
-        img_form.addRow(self.cb_auto_orient)
-
-        # click to open fullscreen
-        self.cb_fullscreen = QCheckBox("Open image fullscreen on click (click to enlarge)")
-        self.cb_fullscreen.setChecked(bool(cfg.get("click_open_fullscreen", True)))
-        img_form.addRow(self.cb_fullscreen)
-
-        # Website settings
-        self.le_website = QLineEdit(str(cfg.get("website_url", "")))
+        self.le_website = QLineEdit(str(self.cfg.get("website_url", "")))
         self.le_website.setPlaceholderText("https://example.com (optional)")
         website_form.addRow("Website URL (optional)", self.le_website)
 
         self.sp_site_h = QSpinBox()
         self.sp_site_h.setRange(20, 180)
-        self.sp_site_h.setValue(int(cfg.get("website_height_vh", 50) or 50))
+        self.sp_site_h.setValue(int(self.cfg.get("website_height_vh", 80) or 80))
         self.sp_site_h.setSuffix(" vh")
         website_form.addRow("Website height", self.sp_site_h)
 
-        # Website display mode
         self.cb_website_mode = QCheckBox("Mobile mode (website in grid with images)")
-        current_mode = str(cfg.get("website_display_mode", "mobile")).lower()
+        current_mode = str(self.cfg.get("website_display_mode", "mobile")).lower()
         self.cb_website_mode.setChecked(current_mode == "mobile")
         website_form.addRow(self.cb_website_mode)
 
         self.sp_site_w = QSpinBox()
         self.sp_site_w.setRange(10, 100)
-        self.sp_site_w.setValue(int(cfg.get("website_width_percent", 100) or 100))
+        self.sp_site_w.setValue(int(self.cfg.get("website_width_percent", 100) or 100))
         self.sp_site_w.setSuffix(" %")
         website_form.addRow("Website width (mobile mode)", self.sp_site_w)
 
-        # Audio settings (separate tab)
-        self.le_audio = QLineEdit(str(cfg.get("audio_file_path", "")))
-        self.le_audio.setPlaceholderText("Path to mp3 file (optional)")
-        btn_audio = QPushButton("Browse…")
-        def _on_browse_audio():
-            try:
-                from aqt.qt import QFileDialog
-                file, _ = QFileDialog.getOpenFileName(
-                    self,
-                    "Select audio file",
-                    "",
-                    "Audio Files (*.mp3 *.wav *.flac *.aac *.ogg);;All Files (*)"
-                )
-                if file:
-                    self.le_audio.setText(file)
-            except Exception:
-                pass
-        qconnect(btn_audio.clicked, _on_browse_audio)
+        self.sp_site_radius = QSpinBox()
+        self.sp_site_radius.setRange(0, 48)
+        self.sp_site_radius.setValue(int(self.cfg.get("website_border_radius_px", 4) or 4))
+        self.sp_site_radius.setSuffix(" px")
+        website_form.addRow("Website corner radius", self.sp_site_radius)
 
-        audio_row = QWidget()
-        audio_layout = QHBoxLayout(audio_row)
-        audio_layout.setContentsMargins(0, 0, 0, 0)
-        audio_layout.addWidget(self.le_audio, 1)
-        audio_layout.addWidget(btn_audio)
-        audio_form.addRow("Background audio (optional)", audio_row)
+        # Audio tab
+        tab_audio = QWidget()
+        tabs.addTab(tab_audio, "Audio")
 
-        # (Video tab removed)
+        # Audio can get tall; keep it usable by always allowing scroll.
+        tab_audio_layout = QVBoxLayout(tab_audio)
+        tab_audio_layout.setContentsMargins(0, 0, 0, 0)
+        tab_audio_layout.setSpacing(0)
 
-        self.sp_audio_vol = QSpinBox()
-        self.sp_audio_vol.setRange(0, 100)
-        self.sp_audio_vol.setValue(int(cfg.get("audio_volume", 50) or 50))
-        self.sp_audio_vol.setSuffix(" %")
-        audio_form.addRow("Audio volume", self.sp_audio_vol)
+        audio_scroll = QScrollArea()
+        audio_scroll.setWidgetResizable(True)
+        tab_audio_layout.addWidget(audio_scroll)
 
-        # (Behavior tab removed)
+        audio_container = QWidget()
+        audio_scroll.setWidget(audio_container)
+
+        audio_layout = QVBoxLayout(audio_container)
+        audio_form = QFormLayout()
+        audio_layout.addLayout(audio_form)
+
+        # Volume
+        self.sp_volume = QSpinBox()
+        self.sp_volume.setRange(0, 100)
+        self.sp_volume.setValue(int(self.cfg.get("audio_volume", 50) or 50))
+        self.sp_volume.setSuffix(" %")
+        audio_form.addRow("Audio volume:", self.sp_volume)
+
+        info = QLabel(
+            "Audio (simple 2-playlist schedule):\n\n"
+            "- Playlist 1: plays all day on days when Playlist 2 is NOT scheduled.\n"
+            "- Playlist 2: plays all day on scheduled play days (e.g., every other day for 21 days, then 5-day break).\n\n"
+            "Tip: To make a playlist play all day, enable 'Loop forever' for that playlist."
+        )
+        info.setWordWrap(True)
+        audio_layout.addWidget(info)
+
+        self.cb_program_enabled = QCheckBox("Enable Playlist 2 schedule (alternate days for 21 days, then 5-day break)")
+        audio_form.addRow(self.cb_program_enabled)
+
+        self.lbl_cycle_status = QLabel("")
+        self.lbl_cycle_status.setWordWrap(True)
+        audio_layout.addWidget(self.lbl_cycle_status)
+
+        self.btn_cycle_reset = QPushButton("Clear cycle counters")
+        qconnect(self.btn_cycle_reset.clicked, self._on_clear_cycle)
+        audio_layout.addWidget(self.btn_cycle_reset)
+
+        self.audio_sources: dict[int, dict] = {}
+        for i in (1, 2):
+            le = QLineEdit()
+            btn_folder = QPushButton("Folder…")
+
+            cb_loop = QCheckBox("Loop all day")
+
+            row = QWidget()
+            row_l = QHBoxLayout(row)
+            row_l.setContentsMargins(0, 0, 0, 0)
+            row_l.addWidget(le, 1)
+            row_l.addWidget(btn_folder)
+
+            label = "Playlist 1 (every day) source" if i == 1 else "Playlist 2 (scheduled) source"
+            audio_form.addRow(label, row)
+
+            audio_form.addRow(f"Playlist {i} loop", cb_loop)
+
+            self.audio_sources[i] = {
+                "le": le,
+                "btn_folder": btn_folder,
+                "cb_loop": cb_loop,
+            }
+            qconnect(btn_folder.clicked, lambda _, idx=i: self._browse_audio_folder(idx))
+
+        qconnect(self.cb_program_enabled.stateChanged, lambda _: self._on_program_toggle())
+
+        # Quotes tab
+        tab_quotes = QWidget()
+        tabs.addTab(tab_quotes, "Quotes")
+        quotes_layout = QVBoxLayout(tab_quotes)
+
+        quotes_style_row = QWidget()
+        quotes_style_l = QHBoxLayout(quotes_style_row)
+        quotes_style_l.setContentsMargins(0, 0, 0, 0)
+
+        self.sp_quote_size = QSpinBox()
+        self.sp_quote_size.setRange(6, 20)
+        self.sp_quote_size.setValue(int(round(float(self.cfg.get("quotes_font_size_em", 0.9) or 0.9) * 10)))
+        self.sp_quote_size.setSuffix(" (0.1em)")
+
+        self.cb_quote_italic = QCheckBox("Italic")
+        self.cb_quote_italic.setChecked(bool(self.cfg.get("quotes_italic", True)))
+
+        self.cb_quote_align = QComboBox()
+        self.cb_quote_align.addItem("Left", "left")
+        self.cb_quote_align.addItem("Center", "center")
+        align = str(self.cfg.get("quotes_align", "left") or "left")
+        for i in range(self.cb_quote_align.count()):
+            if self.cb_quote_align.itemData(i) == align:
+                self.cb_quote_align.setCurrentIndex(i)
+                break
+
+        quotes_style_l.addWidget(QLabel("Quote style:"))
+        quotes_style_l.addWidget(QLabel("Size"))
+        quotes_style_l.addWidget(self.sp_quote_size)
+        quotes_style_l.addWidget(self.cb_quote_italic)
+        quotes_style_l.addWidget(QLabel("Align"))
+        quotes_style_l.addWidget(self.cb_quote_align)
+        quotes_style_l.addStretch(1)
+        quotes_layout.addWidget(quotes_style_row)
+
+        # Quotes editor (one quote per line)
+        self.te_quotes = QTextEdit()
+        self.te_quotes.setPlaceholderText("One quote per line. You can paste a full file here.")
+        quotes_layout.addWidget(self.te_quotes, 1)
+
+        q_btn_row = QHBoxLayout()
+        btn_save_quotes = QPushButton("Save Quotes")
+        btn_reload_quotes = QPushButton("Reload From File")
+        q_btn_row.addWidget(btn_save_quotes)
+        q_btn_row.addWidget(btn_reload_quotes)
+        quotes_layout.addLayout(q_btn_row)
+
+        qconnect(btn_save_quotes.clicked, lambda: self._on_save_quotes())
+        qconnect(btn_reload_quotes.clicked, lambda: self._on_reload_quotes())
 
         # Buttons
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        btn_reset = QPushButton("Reset to defaults")
+        btns.addButton(btn_reset, QDialogButtonBox.ButtonRole.ResetRole)
+        qconnect(btn_reset.clicked, self._on_reset)
+        qconnect(btns.accepted, self._on_save)
+        qconnect(btns.rejected, self.reject)
+        root.addWidget(btns)
+
+        # Initialize
+        self._load_config_to_ui()
+        self._load_quotes_ui()
+
+    def _load_config_to_ui(self):
+        cfg = self.cfg
+        self.cb_enabled.setChecked(bool(cfg.get("enabled", True)))
+        self.cb_q.setChecked(bool(cfg.get("show_on_question", True)))
+        self.cb_a.setChecked(bool(cfg.get("show_on_answer", True)))
+
+        self.le_folder.setText(str(cfg.get("folder_name", "study_companion_images")))
+        self.sp_w.setValue(int(cfg.get("max_width_percent", 80) or 0))
+        self.sp_h.setValue(int(cfg.get("max_height_vh", 60) or 0))
+        unit = str(cfg.get("max_height_unit", "vh")).lower()
+        if unit not in ("vh", "%"):
+            unit = "vh"
+        self.cb_h_unit.setCurrentText(unit)
+        self.cb_use_custom_w.setChecked(bool(cfg.get("use_custom_width", False)))
+        self.cb_use_custom_h.setChecked(bool(cfg.get("use_custom_height", False)))
+        self.sp_count.setValue(int(cfg.get("images_to_show", 1) or 1))
+        self.cb_avoid.setChecked(bool(cfg.get("avoid_repeat", True)))
+        self.cb_quotes.setChecked(bool(cfg.get("show_motivation_quotes", True)))
+        self.cb_auto_orient.setChecked(bool(cfg.get("auto_orient_single_image", True)))
+        self.cb_fullscreen.setChecked(bool(cfg.get("click_open_fullscreen", True)))
+
+        self.le_website.setText(str(cfg.get("website_url", "")))
+        self.sp_site_h.setValue(int(cfg.get("website_height_vh", 80) or 80))
+        self.cb_website_mode.setChecked(str(cfg.get("website_display_mode", "mobile")).lower() == "mobile")
+        self.sp_site_w.setValue(int(cfg.get("website_width_percent", 100) or 100))
+
+        self.sp_volume.setValue(int(cfg.get("audio_volume", 50) or 50))
+
+        self.cb_program_enabled.setChecked(bool(cfg.get("audio_program_enabled", False)))
+
+        self._on_program_toggle()
+        self._refresh_cycle_status()
+
+        # new sources, with fallback to legacy audio_file_path
+        for i in (1, 2):
+            key = f"audio_playlist_{i}_path"
+            val = str(cfg.get(key, "") or "").strip()
+            if not val and i == 1:
+                val = str(cfg.get("audio_file_path", "") or "").strip()
+            self.audio_sources[i]["le"].setText(val)
+            self.audio_sources[i]["cb_loop"].setChecked(bool(cfg.get(f"audio_loop_{i}", False)))
+
+    def _browse_audio_folder(self, idx: int) -> None:
+        try:
+            folder = QFileDialog.getExistingDirectory(
+                self,
+                f"Select folder for Playlist {idx}",
+                os.path.expanduser("~"),
+            )
+            if folder:
+                self.audio_sources[idx]["le"].setText(folder)
+        except Exception:
+            pass
+
+    def _on_save(self):
+        folder = sanitize_folder_name(self.le_folder.text())
+        self.le_folder.setText(folder)
+
+        cfg = self.cfg.copy()
+        cfg.update(
+            {
+                "enabled": bool(self.cb_enabled.isChecked()),
+                "show_on_question": bool(self.cb_q.isChecked()),
+                "show_on_answer": bool(self.cb_a.isChecked()),
+                "folder_name": folder,
+                "images_to_show": int(self.sp_count.value()),
+                "avoid_repeat": bool(self.cb_avoid.isChecked()),
+                "show_motivation_quotes": bool(self.cb_quotes.isChecked()),
+                "auto_orient_single_image": bool(self.cb_auto_orient.isChecked()),
+                "click_open_fullscreen": bool(self.cb_fullscreen.isChecked()),
+                "use_custom_width": bool(self.cb_use_custom_w.isChecked()),
+                "use_custom_height": bool(self.cb_use_custom_h.isChecked()),
+                "max_width_percent": int(self.sp_w.value()),
+                "max_height_vh": int(self.sp_h.value()),
+                "max_height_unit": str(self.cb_h_unit.currentText()),
+                "images_max_columns": int(self.sp_img_cols.value()),
+                "images_grid_gap_px": int(self.sp_img_gap.value()),
+                "image_corner_radius_px": int(self.sp_img_radius.value()),
+                "website_url": str(self.le_website.text()).strip(),
+                "website_height_vh": int(self.sp_site_h.value()),
+                "website_display_mode": "mobile" if self.cb_website_mode.isChecked() else "desktop",
+                "website_width_percent": int(self.sp_site_w.value()),
+                "website_border_radius_px": int(self.sp_site_radius.value()),
+                "quotes_font_size_em": float(self.sp_quote_size.value()) / 10.0,
+                "quotes_italic": bool(self.cb_quote_italic.isChecked()),
+                "quotes_align": str(self.cb_quote_align.currentData() or "left"),
+                "audio_volume": int(self.sp_volume.value()),
+                "audio_program_enabled": bool(self.cb_program_enabled.isChecked()),
+                # Fixed schedule (kept in config for status display/backwards compat)
+                "audio_program_active_days": 21,
+                "audio_program_break_days": 5,
+            }
         )
 
-        btn_reset = QPushButton("Reset to defaults")
-        buttons.addButton(btn_reset, QDialogButtonBox.ButtonRole.ResetRole)
-        qconnect(btn_reset.clicked, self._on_reset)
+        # Program mode always uses cycle tracking (day counters)
+        if bool(cfg.get("audio_program_enabled", False)):
+            cfg["audio_cycle_enabled"] = True
 
-        qconnect(buttons.accepted, self._on_ok)
-        qconnect(buttons.rejected, self.reject)
-        root.addWidget(buttons)
+        for i in (1, 2):
+            cfg[f"audio_playlist_{i}_path"] = str(self.audio_sources[i]["le"].text() or "").strip()
+            cfg[f"audio_loop_{i}"] = bool(self.audio_sources[i]["cb_loop"].isChecked())
 
-    def _on_open_folder(self):
-        folder = sanitize_folder_name(self.le_folder.text())
-        self.le_folder.setText(folder)
-        open_images_folder(folder)
-
-    def _on_ok(self):
-        folder = sanitize_folder_name(self.le_folder.text())
-        self.le_folder.setText(folder)
-
-        new_cfg = {
-            "enabled": bool(self.cb_enabled.isChecked()),
-            "show_on_question": bool(self.cb_q.isChecked()),
-            "show_on_answer": bool(self.cb_a.isChecked()),
-            "folder_name": folder,
-            "max_width_percent": int(self.sp_w.value()),
-            "max_height_vh": int(self.sp_h.value()),
-            "use_custom_width": bool(self.cb_use_custom_w.isChecked()),
-            "use_custom_height": bool(self.cb_use_custom_h.isChecked()),
-            "max_height_unit": str(self.cb_h_unit.currentText()),
-            "website_url": str(self.le_website.text()).strip(),
-            "website_height_vh": int(self.sp_site_h.value()),
-            "website_display_mode": "mobile" if self.cb_website_mode.isChecked() else "desktop",
-            "website_width_percent": int(self.sp_site_w.value()),
-            "audio_file_path": str(self.le_audio.text()).strip(),
-            "audio_volume": int(self.sp_audio_vol.value()),
-            "images_to_show": int(self.sp_count.value()),
-            "avoid_repeat": bool(self.cb_avoid.isChecked()),
-            "show_motivation_quotes": bool(self.cb_quotes.isChecked()),
-            "click_open_fullscreen": bool(self.cb_fullscreen.isChecked()),
-            "auto_orient_single_image": bool(self.cb_auto_orient.isChecked()),
-        }
-        write_config(new_cfg)
+        write_config(cfg)
         try:
-            setup_audio_player(new_cfg)
+            setup_audio_player(cfg)
         except Exception:
             pass
         self.accept()
 
-    def _on_reset(self):
-        d = get_defaults()
+    def _refresh_cycle_status(self) -> None:
+        cfg = self.cfg
+        program = bool(cfg.get("audio_program_enabled", False))
+        day = int(cfg.get("audio_cycle_day", 1) or 1)
+        cycles = int(cfg.get("audio_cycle_count", 0) or 0)
+        last = str(cfg.get("audio_cycle_last_date", "") or "").strip()
+        if program:
+            active_days = 21
+            break_days = 5
+            total = active_days + break_days
 
+            if day > active_days:
+                phase = "Break"
+                today_action = "Playlist 2: OFF (break)"
+            else:
+                phase = "Active"
+                is_play = (day % 2) == 1
+                today_action = "Playlist 2: ON" if is_play else "Playlist 2: OFF"
+
+            self.lbl_cycle_status.setText(
+                f"Schedule is ON. Cycle day: {day}/{total} ({phase}; {today_action}). Cycles completed: {cycles}. Last advanced on: {last or '—'}."
+            )
+            return
+
+        self.lbl_cycle_status.setText("Schedule is OFF. Playlist 1 will play when enabled.")
+
+    def _on_program_toggle(self) -> None:
+        # Only refresh the status label; schedule parameters are fixed.
+        self._refresh_cycle_status()
+
+    def _on_clear_cycle(self) -> None:
+        try:
+            write_config({"audio_cycle_day": 1, "audio_cycle_count": 0, "audio_cycle_last_date": ""})
+            self.cfg["audio_cycle_day"] = 1
+            self.cfg["audio_cycle_count"] = 0
+            self.cfg["audio_cycle_last_date"] = ""
+            self._refresh_cycle_status()
+        except Exception:
+            pass
+
+    def _on_pick_image_folder(self) -> None:
+        try:
+            col = getattr(_mw, "col", None)
+            if not col:
+                return
+            media_dir = col.media.dir()
+            start = media_dir
+            folder = QFileDialog.getExistingDirectory(self, "Select image folder inside collection.media", start)
+            if not folder:
+                return
+
+            # Enforce selection inside collection.media
+            media_dir_real = os.path.realpath(media_dir)
+            folder_real = os.path.realpath(folder)
+            if not folder_real.startswith(media_dir_real + os.sep) and folder_real != media_dir_real:
+                return
+
+            rel = os.path.relpath(folder_real, media_dir_real)
+            rel = rel.replace("\\", "/")
+            rel = sanitize_folder_name(rel)
+            self.le_folder.setText(rel)
+        except Exception:
+            pass
+
+    def _on_open_folder(self) -> None:
+        folder = sanitize_folder_name(self.le_folder.text())
+        self.le_folder.setText(folder)
+        open_images_folder(folder)
+
+    def _on_reset(self) -> None:
+        d = get_defaults()
+        # General
         self.cb_enabled.setChecked(bool(d.get("enabled", True)))
         self.cb_q.setChecked(bool(d.get("show_on_question", True)))
         self.cb_a.setChecked(bool(d.get("show_on_answer", True)))
 
+        # Images
         self.le_folder.setText(str(d.get("folder_name", "study_companion_images")))
-
-        self.sp_w.setValue(int(d.get("max_width_percent", 80) or 0))
-        self.sp_h.setValue(int(d.get("max_height_vh", 60) or 0))
-        self.cb_h_unit.setCurrentText(str(d.get("max_height_unit", "vh")))
-        # ensure suffix matches
-        self.sp_h.setSuffix(" vh" if str(d.get("max_height_unit", "vh")) == "vh" else " %")
-
-        self.le_website.setText(str(d.get("website_url", "")))
-        self.sp_site_h.setValue(int(d.get("website_height_vh", 50) or 50))
-        self.cb_website_mode.setChecked(str(d.get("website_display_mode", "mobile")).lower() == "mobile")
-        self.sp_site_w.setValue(int(d.get("website_width_percent", 100) or 100))
-        self.le_audio.setText(str(d.get("audio_file_path", "")))
-        self.sp_audio_vol.setValue(int(d.get("audio_volume", 50) or 50))
-
         self.sp_count.setValue(int(d.get("images_to_show", 1) or 1))
         self.cb_avoid.setChecked(bool(d.get("avoid_repeat", True)))
         self.cb_quotes.setChecked(bool(d.get("show_motivation_quotes", True)))
-        self.cb_fullscreen.setChecked(bool(d.get("click_open_fullscreen", True)))
         self.cb_auto_orient.setChecked(bool(d.get("auto_orient_single_image", True)))
+        self.cb_fullscreen.setChecked(bool(d.get("click_open_fullscreen", True)))
         self.cb_use_custom_w.setChecked(bool(d.get("use_custom_width", False)))
         self.cb_use_custom_h.setChecked(bool(d.get("use_custom_height", False)))
-        # video settings removed from UI
+        self.sp_w.setValue(int(d.get("max_width_percent", 80) or 0))
+        self.sp_h.setValue(int(d.get("max_height_vh", 60) or 0))
+        unit = str(d.get("max_height_unit", "vh")).lower()
+        if unit not in ("vh", "%"):
+            unit = "vh"
+        self.cb_h_unit.setCurrentText(unit)
+        self.sp_img_cols.setValue(int(d.get("images_max_columns", 3) or 3))
+        self.sp_img_gap.setValue(int(d.get("images_grid_gap_px", 8) or 8))
+        self.sp_img_radius.setValue(int(d.get("image_corner_radius_px", 8) or 8))
+
+        # Website
+        self.le_website.setText(str(d.get("website_url", "")))
+        self.sp_site_h.setValue(int(d.get("website_height_vh", 80) or 80))
+        self.cb_website_mode.setChecked(str(d.get("website_display_mode", "mobile")).lower() == "mobile")
+        self.sp_site_w.setValue(int(d.get("website_width_percent", 100) or 100))
+        self.sp_site_radius.setValue(int(d.get("website_border_radius_px", 4) or 4))
+
+        # Quotes style
+        self.sp_quote_size.setValue(int(round(float(d.get("quotes_font_size_em", 0.9) or 0.9) * 10)))
+        self.cb_quote_italic.setChecked(bool(d.get("quotes_italic", True)))
+        align = str(d.get("quotes_align", "left") or "left")
+        for i in range(self.cb_quote_align.count()):
+            if self.cb_quote_align.itemData(i) == align:
+                self.cb_quote_align.setCurrentIndex(i)
+                break
+
+        # Audio
+        self.sp_volume.setValue(int(d.get("audio_volume", 50) or 50))
+        self.cb_program_enabled.setChecked(bool(d.get("audio_program_enabled", False)))
+
+        for i in (1, 2):
+            self.audio_sources[i]["le"].setText("")
+            self.audio_sources[i]["cb_loop"].setChecked(bool(d.get(f"audio_loop_{i}", False)))
+
+        self._on_program_toggle()
+
+    # Quotes UI handlers
+    def _load_quotes_ui(self):
+        try:
+            quotes = get_all_quotes() or []
+            self.te_quotes.setPlainText("\n".join(quotes))
+        except Exception:
+            pass
+
+    def _on_save_quotes(self):
+        raw = str(self.te_quotes.toPlainText() or "")
+        quotes = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        try:
+            save_quotes(quotes)
+        except Exception:
+            pass
+
+    def _on_reload_quotes(self):
+        self._load_quotes_ui()
 
 
-def open_settings_dialog(*args, **kwargs):
-    """
-    Open settings dialog. Expected from the Add-ons "Config" button.
-    Accepts *args/**kwargs for different call styles.
-    """
-    parent = kwargs.get("parent", None)
-    if parent is None and args:
-        parent = args[0]
-    parent = parent or mw
-
-    dlg = SettingsDialog(parent=parent)
-    dlg.exec()
+def show_settings():
+    dlg = SettingsDialog(mw)
+    # Qt6/PyQt6 removed exec_() in favor of exec().
+    exec_fn = getattr(dlg, "exec", None) or getattr(dlg, "exec_", None)
+    if exec_fn is not None:
+        exec_fn()
 
 
 def register_config_action() -> None:
-    """
-    Wire the Add-ons "Config" button to open the settings dialog.
-    """
     try:
-        mw.addonManager.setConfigAction(__name__.split(".")[0], open_settings_dialog)
-        print("[StudyCompanion] Config action registered.")
-    except Exception as e:
-        print(f"[StudyCompanion] setConfigAction not available: {e}")
+        mw.addonManager.setConfigAction(__name__.split(".")[0], show_settings)
+    except Exception:
         try:
             menu = getattr(mw.form, "menuTools", None) or getattr(mw.form, "toolsMenu", None)
             if menu is not None:
                 act = QAction("StudyCompanion Settings…", mw)
-                qconnect(act.triggered, open_settings_dialog)
+                qconnect(act.triggered, show_settings)
                 menu.addAction(act)
-        except Exception as e2:
-            print(f"[StudyCompanion] Fallback menu failed: {e2}")
+        except Exception:
+            pass
 
 
 def register_tools_menu() -> None:
-    """Add settings action to Tools menu."""
     try:
         menu = getattr(mw.form, "menuTools", None)
         if menu:
             action = QAction("StudyCompanion Settings…", mw)
-            qconnect(action.triggered, open_settings_dialog)
+            qconnect(action.triggered, show_settings)
             menu.addAction(action)
-    except Exception as e:
-        print(f"[StudyCompanion] Failed to add Tools menu item: {e}")
+    except Exception:
+        pass
+
+
+register_config_action()
+register_tools_menu()
