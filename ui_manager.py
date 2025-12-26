@@ -15,6 +15,7 @@ from .config_manager import get_config, write_config, get_defaults
 from .image_manager import open_images_folder, sanitize_folder_name
 from .audio_manager import setup_audio_player
 from .quotes import get_all_quotes, save_quotes
+from aqt.utils import openFolder
 import os
 import re
 from typing import List
@@ -75,31 +76,43 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         root.addWidget(tabs, 1)
 
-        # General tab
-        tab_general = QWidget()
-        tabs.addTab(tab_general, "General")
-        gen_layout = QVBoxLayout(tab_general)
-        gen_form = QFormLayout()
-        gen_layout.addLayout(gen_form)
-
-        self.cb_enabled = QCheckBox("Enable add-on")
-        self.cb_enabled.setChecked(bool(self.cfg.get("enabled", True)))
-        gen_form.addRow(self.cb_enabled)
-
-        self.cb_q = QCheckBox("Show on Question side")
-        self.cb_q.setChecked(bool(self.cfg.get("show_on_question", True)))
-        gen_form.addRow(self.cb_q)
-
-        self.cb_a = QCheckBox("Show on Answer side")
-        self.cb_a.setChecked(bool(self.cfg.get("show_on_answer", True)))
-        gen_form.addRow(self.cb_a)
-
         # Images tab
         tab_images = QWidget()
         tabs.addTab(tab_images, "Images")
         img_layout = QVBoxLayout(tab_images)
+
+        img_scroll = QScrollArea()
+        img_scroll.setWidgetResizable(True)
+        img_layout.addWidget(img_scroll, 1)
+
+        img_container = QWidget()
+        img_scroll.setWidget(img_container)
+
+        img_container_layout = QVBoxLayout(img_container)
         img_form = QFormLayout()
-        img_layout.addLayout(img_form)
+        img_container_layout.addLayout(img_form)
+
+        def _section(title: str) -> None:
+            lbl = QLabel(f"<b>{title}</b>")
+            lbl.setWordWrap(True)
+            img_form.addRow(lbl)
+
+        _section("General")
+
+        # General settings (moved here because they're primarily about image display)
+        self.cb_enabled = QCheckBox("Enable add-on")
+        self.cb_enabled.setChecked(bool(self.cfg.get("enabled", True)))
+        img_form.addRow(self.cb_enabled)
+
+        self.cb_q = QCheckBox("Show on Question side")
+        self.cb_q.setChecked(bool(self.cfg.get("show_on_question", True)))
+        img_form.addRow(self.cb_q)
+
+        self.cb_a = QCheckBox("Show on Answer side")
+        self.cb_a.setChecked(bool(self.cfg.get("show_on_answer", True)))
+        img_form.addRow(self.cb_a)
+
+        _section("Card Images")
 
         self.le_folder = QLineEdit(str(self.cfg.get("folder_name", "study_companion_images")))
         self.le_folder.setPlaceholderText("study_companion_images")
@@ -190,6 +203,105 @@ class SettingsDialog(QDialog):
         self.sp_img_radius.setValue(int(self.cfg.get("image_corner_radius_px", 8) or 8))
         self.sp_img_radius.setSuffix(" px")
         img_form.addRow("Image corner radius", self.sp_img_radius)
+
+        _section("Answer Submit Popup")
+
+        # Answer-submit image popup
+        self.cb_answer_image = QCheckBox(
+            "Show the image on answer submit (Again/Hard = angry, Good/Easy = happy)"
+        )
+        self.cb_answer_image.setChecked(bool(self.cfg.get("answer_image_enabled", False)))
+        img_form.addRow(self.cb_answer_image)
+
+        self.le_answer_angry = QLineEdit(str(self.cfg.get("answer_image_angry_folder", "") or ""))
+        self.le_answer_angry.setPlaceholderText("e.g. /path/to/angry_images")
+        btn_pick_angry = QPushButton("Select folder…")
+        btn_open_angry = QPushButton("Open folder")
+        qconnect(
+            btn_pick_angry.clicked,
+            lambda: self._pick_any_folder_into(self.le_answer_angry, "Select angry image folder"),
+        )
+        qconnect(btn_open_angry.clicked, lambda: self._open_any_folder_from(self.le_answer_angry))
+        angry_row = QWidget()
+        angry_layout = QHBoxLayout(angry_row)
+        angry_layout.setContentsMargins(0, 0, 0, 0)
+        angry_layout.addWidget(self.le_answer_angry, 1)
+        angry_layout.addWidget(btn_pick_angry)
+        angry_layout.addWidget(btn_open_angry)
+        img_form.addRow("Angry image folder", angry_row)
+
+        self.le_answer_happy = QLineEdit(str(self.cfg.get("answer_image_happy_folder", "") or ""))
+        self.le_answer_happy.setPlaceholderText("e.g. /path/to/happy_images")
+        btn_pick_happy = QPushButton("Select folder…")
+        btn_open_happy = QPushButton("Open folder")
+        qconnect(
+            btn_pick_happy.clicked,
+            lambda: self._pick_any_folder_into(self.le_answer_happy, "Select happy image folder"),
+        )
+        qconnect(btn_open_happy.clicked, lambda: self._open_any_folder_from(self.le_answer_happy))
+        happy_row = QWidget()
+        happy_layout = QHBoxLayout(happy_row)
+        happy_layout.setContentsMargins(0, 0, 0, 0)
+        happy_layout.addWidget(self.le_answer_happy, 1)
+        happy_layout.addWidget(btn_pick_happy)
+        happy_layout.addWidget(btn_open_happy)
+        img_form.addRow("Happy image folder", happy_row)
+
+        self.sp_answer_image_duration = QSpinBox()
+        self.sp_answer_image_duration.setRange(1, 30)
+        self.sp_answer_image_duration.setValue(int(self.cfg.get("answer_image_duration_seconds", 3) or 3))
+        self.sp_answer_image_duration.setSuffix(" s")
+        img_form.addRow("Popup duration", self.sp_answer_image_duration)
+
+        self.cb_answer_popup_use_w = QCheckBox("Use custom popup max width")
+        self.cb_answer_popup_use_w.setChecked(bool(self.cfg.get("answer_image_popup_use_custom_width", False)))
+        img_form.addRow(self.cb_answer_popup_use_w)
+
+        self.sp_answer_popup_w_pct = QSpinBox()
+        self.sp_answer_popup_w_pct.setRange(5, 100)
+        self.sp_answer_popup_w_pct.setValue(int(self.cfg.get("answer_image_popup_max_width_percent", 70) or 70))
+        self.sp_answer_popup_w_pct.setSuffix(" %")
+        img_form.addRow("Popup max width", self.sp_answer_popup_w_pct)
+
+        self.cb_answer_popup_use_h = QCheckBox("Use custom popup max height")
+        self.cb_answer_popup_use_h.setChecked(bool(self.cfg.get("answer_image_popup_use_custom_height", False)))
+        img_form.addRow(self.cb_answer_popup_use_h)
+
+        self.sp_answer_popup_h_val = QSpinBox()
+        self.sp_answer_popup_h_val.setRange(5, 200)
+        self.sp_answer_popup_h_val.setValue(int(self.cfg.get("answer_image_popup_max_height_vh", 60) or 60))
+
+        self.cb_answer_popup_h_unit = QComboBox()
+        self.cb_answer_popup_h_unit.addItems(["vh", "%"])
+        h_unit = str(self.cfg.get("answer_image_popup_max_height_unit", "vh")).lower()
+        if h_unit not in ("vh", "%"):
+            h_unit = "vh"
+        self.cb_answer_popup_h_unit.setCurrentText(h_unit)
+        self.sp_answer_popup_h_val.setSuffix(" vh" if h_unit == "vh" else " %")
+
+        def _on_popup_h_unit_changed(text: str):
+            self.sp_answer_popup_h_val.setSuffix(" vh" if text == "vh" else " %")
+
+        qconnect(self.cb_answer_popup_h_unit.currentTextChanged, _on_popup_h_unit_changed)
+
+        popup_h_row = QWidget()
+        popup_h_layout = QHBoxLayout(popup_h_row)
+        popup_h_layout.setContentsMargins(0, 0, 0, 0)
+        popup_h_layout.addWidget(self.sp_answer_popup_h_val, 1)
+        popup_h_layout.addWidget(self.cb_answer_popup_h_unit)
+        img_form.addRow("Popup max height", popup_h_row)
+
+        def _toggle_popup_w(enabled: bool):
+            self.sp_answer_popup_w_pct.setEnabled(bool(enabled))
+
+        def _toggle_popup_h(enabled: bool):
+            self.sp_answer_popup_h_val.setEnabled(bool(enabled))
+            self.cb_answer_popup_h_unit.setEnabled(bool(enabled))
+
+        qconnect(self.cb_answer_popup_use_w.toggled, _toggle_popup_w)
+        qconnect(self.cb_answer_popup_use_h.toggled, _toggle_popup_h)
+        _toggle_popup_w(self.cb_answer_popup_use_w.isChecked())
+        _toggle_popup_h(self.cb_answer_popup_use_h.isChecked())
 
         # Website tab
         tab_website = QWidget()
@@ -358,6 +470,20 @@ class SettingsDialog(QDialog):
         self.cb_auto_orient.setChecked(bool(cfg.get("auto_orient_single_image", True)))
         self.cb_fullscreen.setChecked(bool(cfg.get("click_open_fullscreen", True)))
 
+        # Answer-submit popup
+        self.cb_answer_image.setChecked(bool(cfg.get("answer_image_enabled", False)))
+        self.le_answer_angry.setText(str(cfg.get("answer_image_angry_folder", "") or ""))
+        self.le_answer_happy.setText(str(cfg.get("answer_image_happy_folder", "") or ""))
+        self.sp_answer_image_duration.setValue(int(cfg.get("answer_image_duration_seconds", 3) or 3))
+        self.cb_answer_popup_use_w.setChecked(bool(cfg.get("answer_image_popup_use_custom_width", False)))
+        self.sp_answer_popup_w_pct.setValue(int(cfg.get("answer_image_popup_max_width_percent", 70) or 70))
+        self.cb_answer_popup_use_h.setChecked(bool(cfg.get("answer_image_popup_use_custom_height", False)))
+        self.sp_answer_popup_h_val.setValue(int(cfg.get("answer_image_popup_max_height_vh", 60) or 60))
+        h_unit = str(cfg.get("answer_image_popup_max_height_unit", "vh")).lower()
+        if h_unit not in ("vh", "%"):
+            h_unit = "vh"
+        self.cb_answer_popup_h_unit.setCurrentText(h_unit)
+
         self.le_website.setText(str(cfg.get("website_url", "")))
         self.sp_site_h.setValue(int(cfg.get("website_height_vh", 80) or 80))
         self.cb_website_mode.setChecked(str(cfg.get("website_display_mode", "mobile")).lower() == "mobile")
@@ -388,6 +514,14 @@ class SettingsDialog(QDialog):
         folder = sanitize_folder_name(self.le_folder.text())
         self.le_folder.setText(folder)
 
+        # These can be either:
+        # - absolute folders anywhere on disk (recommended)
+        # - OR a collection.media subfolder name (legacy)
+        angry_folder = str(self.le_answer_angry.text() or "").strip()
+        happy_folder = str(self.le_answer_happy.text() or "").strip()
+        self.le_answer_angry.setText(angry_folder)
+        self.le_answer_happy.setText(happy_folder)
+
         cfg = self.cfg.copy()
         cfg.update(
             {
@@ -408,6 +542,15 @@ class SettingsDialog(QDialog):
                 "images_max_columns": int(self.sp_img_cols.value()),
                 "images_grid_gap_px": int(self.sp_img_gap.value()),
                 "image_corner_radius_px": int(self.sp_img_radius.value()),
+                "answer_image_enabled": bool(self.cb_answer_image.isChecked()),
+                "answer_image_angry_folder": angry_folder,
+                "answer_image_happy_folder": happy_folder,
+                "answer_image_duration_seconds": int(self.sp_answer_image_duration.value()),
+                "answer_image_popup_use_custom_width": bool(self.cb_answer_popup_use_w.isChecked()),
+                "answer_image_popup_max_width_percent": int(self.sp_answer_popup_w_pct.value()),
+                "answer_image_popup_use_custom_height": bool(self.cb_answer_popup_use_h.isChecked()),
+                "answer_image_popup_max_height_vh": int(self.sp_answer_popup_h_val.value()),
+                "answer_image_popup_max_height_unit": str(self.cb_answer_popup_h_unit.currentText()),
                 "website_url": str(self.le_website.text()).strip(),
                 "website_height_vh": int(self.sp_site_h.value()),
                 "website_display_mode": "mobile" if self.cb_website_mode.isChecked() else "desktop",
@@ -468,6 +611,48 @@ class SettingsDialog(QDialog):
         self.le_folder.setText(folder)
         open_images_folder(folder)
 
+    def _pick_any_folder_into(self, target: QLineEdit, title: str) -> None:
+        try:
+            start = os.path.expanduser("~")
+            current = str(target.text() or "").strip()
+            if current:
+                try:
+                    expanded = os.path.expanduser(current)
+                    if os.path.isdir(expanded):
+                        start = expanded
+                except Exception:
+                    pass
+
+            folder = QFileDialog.getExistingDirectory(self, title, start)
+            if not folder:
+                return
+
+            target.setText(folder)
+        except Exception:
+            pass
+
+    def _open_any_folder_from(self, source: QLineEdit) -> None:
+        folder = str(source.text() or "").strip()
+        if not folder:
+            return
+
+        # If it exists on disk, open it directly.
+        try:
+            expanded = os.path.expanduser(folder)
+            if os.path.isdir(expanded):
+                openFolder(expanded)
+                return
+        except Exception:
+            pass
+
+        # Otherwise treat it as a collection.media subfolder name.
+        try:
+            folder2 = sanitize_folder_name(folder)
+            source.setText(folder2)
+            open_images_folder(folder2)
+        except Exception:
+            pass
+
     def _on_reset(self) -> None:
         d = get_defaults()
         # General
@@ -493,6 +678,19 @@ class SettingsDialog(QDialog):
         self.sp_img_cols.setValue(int(d.get("images_max_columns", 3) or 3))
         self.sp_img_gap.setValue(int(d.get("images_grid_gap_px", 8) or 8))
         self.sp_img_radius.setValue(int(d.get("image_corner_radius_px", 8) or 8))
+
+        self.cb_answer_image.setChecked(bool(d.get("answer_image_enabled", False)))
+        self.le_answer_angry.setText(str(d.get("answer_image_angry_folder", "") or ""))
+        self.le_answer_happy.setText(str(d.get("answer_image_happy_folder", "") or ""))
+        self.sp_answer_image_duration.setValue(int(d.get("answer_image_duration_seconds", 3) or 3))
+        self.cb_answer_popup_use_w.setChecked(bool(d.get("answer_image_popup_use_custom_width", False)))
+        self.sp_answer_popup_w_pct.setValue(int(d.get("answer_image_popup_max_width_percent", 70) or 70))
+        self.cb_answer_popup_use_h.setChecked(bool(d.get("answer_image_popup_use_custom_height", False)))
+        self.sp_answer_popup_h_val.setValue(int(d.get("answer_image_popup_max_height_vh", 60) or 60))
+        h_unit = str(d.get("answer_image_popup_max_height_unit", "vh")).lower()
+        if h_unit not in ("vh", "%"):
+            h_unit = "vh"
+        self.cb_answer_popup_h_unit.setCurrentText(h_unit)
 
         # Website
         self.le_website.setText(str(d.get("website_url", "")))

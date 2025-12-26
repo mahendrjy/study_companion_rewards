@@ -50,6 +50,21 @@ def get_defaults() -> dict:
         "audio_volume": 50,
         # Orientation-aware single-image display
         "auto_orient_single_image": True,
+
+        # Answer-submit reaction image popup
+        "answer_image_enabled": False,
+        "answer_image_angry_folder": "",
+        "answer_image_happy_folder": "",
+        "answer_image_duration_seconds": 3,
+        # Popup sizing: defaults to auto (based on image dimensions)
+        "answer_image_popup_use_custom_width": False,
+        "answer_image_popup_max_width_percent": 70,
+        "answer_image_popup_use_custom_height": False,
+        "answer_image_popup_max_height_vh": 60,
+        "answer_image_popup_max_height_unit": "vh",
+        # Legacy (no longer shown in UI)
+        "answer_image_popup_max_width_px": 420,
+        "answer_image_popup_max_height_px": 420,
     }
 
 

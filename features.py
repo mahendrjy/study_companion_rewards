@@ -4,8 +4,14 @@ Implements card rendering with images, quotes, and website embedding.
 """
 
 import html
+import os
+import shutil
+import hashlib
+import random
 from urllib.parse import quote as urlquote
 from typing import Dict
+
+from aqt import mw
 
 from .config_manager import get_config
 from .image_manager import (
@@ -20,8 +26,82 @@ from .image_manager import get_media_subfolder_path, _load_meta, _save_meta
 from .quotes import get_random_quote, get_unique_random_quotes
 
 
+_VALID_IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg")
+_ANSWER_POPUP_MEDIA_FOLDER = "study_companion_answer_popup"
+
+
+def trigger_answer_submit_popup(ease: int, cfg: dict | None = None) -> None:
+    """Show a centered Qt popup immediately after answering a card."""
+    try:
+        if cfg is None:
+            cfg = get_config()
+        if not bool(cfg.get("enabled", True)):
+            return
+        if not bool(cfg.get("answer_image_enabled", False)):
+            return
+
+        ease_i = int(ease)
+        if ease_i in (1, 2):
+            folder = str(cfg.get("answer_image_angry_folder", "") or "").strip()
+        elif ease_i in (3, 4):
+            folder = str(cfg.get("answer_image_happy_folder", "") or "").strip()
+        else:
+            return
+        if not folder:
+            return
+
+        duration_s = int(cfg.get("answer_image_duration_seconds", 3) or 3)
+        if duration_s < 1:
+            duration_s = 1
+        if duration_s > 30:
+            duration_s = 30
+
+        image_path = _pick_answer_popup_image_file(folder, cfg)
+        if not image_path:
+            return
+
+        # Show Qt popup (centered, click-to-zoom)
+        from .answer_popup import show_answer_popup
+
+        show_answer_popup(image_path, int(duration_s * 1000), cfg)
+    except Exception:
+        return
+
+
+def _pick_answer_popup_image_file(folder: str, cfg: dict) -> str | None:
+    """Pick an image file path from either an absolute folder or a media subfolder."""
+    disk_folder = _resolve_existing_folder(folder)
+    if disk_folder:
+        return _pick_random_image_path_from_folder(disk_folder)
+
+    folder_media = sanitize_folder_name(folder)
+    image_folder_path = get_media_subfolder_path(folder_media)
+    if not image_folder_path:
+        return None
+
+    # Reuse existing picker by temporarily overriding folder_name
+    cfg2 = dict(cfg)
+    cfg2["folder_name"] = folder_media
+    filenames = pick_random_image_filenames(cfg2, 1)
+    if not filenames:
+        return None
+
+    fname = filenames[0]
+    rel_src = fname
+    try:
+        rel_src = ensure_optimized_copy(image_folder_path, fname) or fname
+    except Exception:
+        rel_src = fname
+
+    full = os.path.join(image_folder_path, rel_src)
+    return full if os.path.exists(full) else os.path.join(image_folder_path, fname)
+
+
 _current_card_id: int | None = None
 _website_iframe_injected: bool = False
+
+# Answer-submit popup state (queued on answer, injected on next question render)
+_pending_answer_popup: dict | None = None
 
 # (Behavior/emotion/session features removed)
 
@@ -41,8 +121,12 @@ def inject_random_image(text: str, card, kind: str) -> str:
     if not cfg.get("enabled", True):
         return text
 
+    # If the user disabled regular question-side injection, still allow the
+    # answer-submit popup to render on the next question.
     if kind.endswith("Question") and not cfg.get("show_on_question", True):
-        return text
+        popup_only = _build_answer_submit_popup_html(kind)
+        return text + popup_only if popup_only else text
+
     if kind.endswith("Answer") and not cfg.get("show_on_answer", True):
         return text
 
@@ -286,7 +370,247 @@ def inject_random_image(text: str, card, kind: str) -> str:
         )
         + "})();\n</script>\n"
     )
+
+    # Inject answer-submit popup (if queued) on the next question render
+    extra_html += _build_answer_submit_popup_html(kind)
+
     return text + extra_html
+
+
+def queue_answer_submit_popup(ease: int, cfg: dict | None = None) -> None:
+    """Queue a happy/angry image popup to be shown on the next question render."""
+    global _pending_answer_popup
+
+    try:
+        if cfg is None:
+            cfg = get_config()
+        if not bool(cfg.get("enabled", True)):
+            return
+        if not bool(cfg.get("answer_image_enabled", False)):
+            return
+
+        ease_i = int(ease)
+        if ease_i in (1, 2):
+            folder = str(cfg.get("answer_image_angry_folder", "") or "").strip()
+        elif ease_i in (3, 4):
+            folder = str(cfg.get("answer_image_happy_folder", "") or "").strip()
+        else:
+            return
+
+        if not folder:
+            return
+
+        # Folder can be either:
+        # - absolute path on disk (recommended)
+        # - OR a collection.media subfolder name (legacy)
+        disk_folder = _resolve_existing_folder(folder)
+
+        duration_s = int(cfg.get("answer_image_duration_seconds", 3) or 3)
+        if duration_s < 1:
+            duration_s = 1
+        if duration_s > 30:
+            duration_s = 30
+
+        if disk_folder:
+            picked_path = _pick_random_image_path_from_folder(disk_folder)
+            if not picked_path:
+                return
+            rel_media = _copy_answer_popup_image_into_media(picked_path)
+            if not rel_media:
+                return
+            src = urlquote(rel_media, safe='/')
+        else:
+            folder_media = sanitize_folder_name(folder)
+
+            # Reuse existing picker by temporarily overriding folder_name
+            cfg2 = dict(cfg)
+            cfg2["folder_name"] = folder_media
+            filenames = pick_random_image_filenames(cfg2, 1)
+            if not filenames:
+                return
+
+            fname = filenames[0]
+            rel_src = fname
+
+            try:
+                image_folder_path = get_media_subfolder_path(folder_media) or ""
+                if image_folder_path:
+                    rel_src = ensure_optimized_copy(image_folder_path, fname) or fname
+            except Exception:
+                rel_src = fname
+
+            src = f"{folder_media}/{urlquote(rel_src, safe='/')}"
+
+        _pending_answer_popup = {
+            "src": src,
+            "duration_ms": int(duration_s * 1000),
+        }
+    except Exception:
+        # Non-fatal
+        return
+
+
+def _consume_answer_submit_popup() -> dict | None:
+    global _pending_answer_popup
+    data = _pending_answer_popup
+    _pending_answer_popup = None
+    return data
+
+
+def _build_answer_submit_popup_html(kind: str) -> str:
+    # Show it on the *next* question render after the user answers a card.
+    if not str(kind or "").endswith("Question"):
+        return ""
+
+    data = _consume_answer_submit_popup()
+    if not data:
+        return ""
+
+    src = html.escape(str(data.get("src", "")), quote=True)
+    duration_ms = int(data.get("duration_ms", 3000) or 3000)
+    if duration_ms < 250:
+        duration_ms = 250
+
+    return (
+        "\n"
+        "<script>\n"
+        "(function() {\n"
+        "  try {\n"
+        "    var src = '" + src.replace("'", "\\'") + "';\n"
+        "    var durationMs = " + str(duration_ms) + ";\n"
+        "    var popup = document.getElementById('sc-answer-img-popup');\n"
+        "    var img;\n"
+        "    if (!popup) {\n"
+        "      popup = document.createElement('div');\n"
+        "      popup.id = 'sc-answer-img-popup';\n"
+        "      popup.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:99998;display:none;';\n"
+        "      img = document.createElement('img');\n"
+        "      img.id = 'sc-answer-img-popup-img';\n"
+        "      img.style.cssText = 'max-width:min(70vw,420px);max-height:min(60vh,420px);border-radius:10px;cursor:zoom-in;display:block;';\n"
+        "      popup.appendChild(img);\n"
+        "      document.body.appendChild(popup);\n"
+        "    }\n"
+        "    img = document.getElementById('sc-answer-img-popup-img') || popup.querySelector('img');\n"
+        "    if (!img) return;\n"
+        "    img.src = src;\n"
+        "    popup.style.display = 'block';\n"
+        "\n"
+        "    var expireAt = Date.now() + durationMs;\n"
+        "    var remainingMs = durationMs;\n"
+        "    var timer = null;\n"
+        "\n"
+        "    function hidePopup() {\n"
+        "      try {\n"
+        "        var zoom = document.getElementById('sc-answer-zoom-overlay');\n"
+        "        if (zoom && zoom.parentNode) zoom.parentNode.removeChild(zoom);\n"
+        "      } catch (e) {}\n"
+        "      try { popup.style.display = 'none'; } catch (e) {}\n"
+        "    }\n"
+        "\n"
+        "    function startTimer(ms) {\n"
+        "      try { if (timer) { clearTimeout(timer); timer = null; } } catch (e) {}\n"
+        "      if (ms <= 0) { hidePopup(); return; }\n"
+        "      timer = setTimeout(hidePopup, ms);\n"
+        "    }\n"
+        "\n"
+        "    function openZoom() {\n"
+        "      if (document.getElementById('sc-answer-zoom-overlay')) return;\n"
+        "      var overlay = document.createElement('div');\n"
+        "      overlay.id = 'sc-answer-zoom-overlay';\n"
+        "      overlay.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;z-index:99999;padding:20px;';\n"
+        "      var big = document.createElement('img');\n"
+        "      big.src = src;\n"
+        "      big.style.cssText = 'max-width:95%;max-height:95%;border-radius:10px;cursor:zoom-out;';\n"
+        "      overlay.appendChild(big);\n"
+        "      overlay.addEventListener('click', function() { toggleZoom(); });\n"
+        "      big.addEventListener('click', function(ev) { ev.stopPropagation(); toggleZoom(); });\n"
+        "      document.body.appendChild(overlay);\n"
+        "    }\n"
+        "\n"
+        "    function closeZoom() {\n"
+        "      var overlay = document.getElementById('sc-answer-zoom-overlay');\n"
+        "      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);\n"
+        "    }\n"
+        "\n"
+        "    var zoomed = false;\n"
+        "    function toggleZoom() {\n"
+        "      if (!zoomed) {\n"
+        "        remainingMs = Math.max(0, expireAt - Date.now());\n"
+        "        try { if (timer) { clearTimeout(timer); timer = null; } } catch (e) {}\n"
+        "        openZoom();\n"
+        "        zoomed = true;\n"
+        "      } else {\n"
+        "        closeZoom();\n"
+        "        zoomed = false;\n"
+        "        if (remainingMs <= 0) { hidePopup(); } else { expireAt = Date.now() + remainingMs; startTimer(remainingMs); }\n"
+        "      }\n"
+        "    }\n"
+        "\n"
+        "    img.onclick = function(ev) { try { ev.stopPropagation(); } catch (e) {} toggleZoom(); };\n"
+        "    startTimer(durationMs);\n"
+        "  } catch (e) {}\n"
+        "})();\n"
+        "</script>\n"
+    )
+
+
+def _resolve_existing_folder(folder: str) -> str | None:
+    try:
+        if not folder:
+            return None
+        expanded = os.path.expanduser(folder)
+        if os.path.isdir(expanded):
+            return expanded
+
+        # allow relative to this add-on folder
+        base = os.path.dirname(__file__)
+        candidate = os.path.join(base, folder)
+        if os.path.isdir(candidate):
+            return candidate
+    except Exception:
+        return None
+    return None
+
+
+def _pick_random_image_path_from_folder(folder_path: str) -> str | None:
+    try:
+        files: list[str] = []
+        for root, _dirs, names in os.walk(folder_path):
+            for n in names:
+                if n.lower().endswith(_VALID_IMG_EXT):
+                    files.append(os.path.join(root, n))
+        if not files:
+            return None
+        return random.choice(files)
+    except Exception:
+        return None
+
+
+def _copy_answer_popup_image_into_media(src_path: str) -> str | None:
+    """Copy a disk image into collection.media/study_companion_answer_popup and return its media-relative path."""
+    try:
+        col = getattr(mw, "col", None)
+        if not col:
+            return None
+        media_dir = col.media.dir()
+        dest_folder = os.path.join(media_dir, _ANSWER_POPUP_MEDIA_FOLDER)
+        os.makedirs(dest_folder, exist_ok=True)
+
+        st = os.stat(src_path)
+        ext = os.path.splitext(src_path)[1].lower() or ".png"
+        h = hashlib.sha1()
+        h.update(os.path.abspath(src_path).encode("utf-8", errors="ignore"))
+        h.update(str(int(st.st_mtime)).encode("utf-8"))
+        h.update(str(int(st.st_size)).encode("utf-8"))
+        name = h.hexdigest() + ext
+        dest_path = os.path.join(dest_folder, name)
+        if not os.path.exists(dest_path):
+            shutil.copy2(src_path, dest_path)
+
+        rel = os.path.relpath(dest_path, media_dir).replace("\\", "/")
+        return rel
+    except Exception:
+        return None
 
 
 def _build_quote_delete_row(show_quotes: bool, quote_index: int, quotes: list[str], filename_escaped: str) -> str:

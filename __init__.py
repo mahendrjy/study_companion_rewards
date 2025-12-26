@@ -24,7 +24,7 @@ from urllib.parse import unquote as urlunquote
 from .image_manager import _load_meta, _save_meta
 from .ui_manager import register_config_action, register_tools_menu
 from .audio_manager import setup_audio_player
-from .features import inject_random_image
+from .features import inject_random_image, trigger_answer_submit_popup
 
 
 def _handle_webview_message(handled, message, context):
@@ -89,6 +89,45 @@ def _on_main_window_init():
         print(f"[StudyCompanion] Failed to setup audio: {e}")
 
 
+def _on_reviewer_did_answer_card(reviewer, card, ease) -> None:
+    """Queue a reaction image popup after the user answers a card."""
+    try:
+        trigger_answer_submit_popup(int(ease), get_config())
+    except Exception:
+        pass
+
+
+def _install_answer_submit_hook() -> None:
+    """Install a hook compatible with multiple Anki versions."""
+    # Preferred hook (recent Anki)
+    try:
+        h = getattr(gui_hooks, "reviewer_did_answer_card", None)
+        if h is not None:
+            h.append(_on_reviewer_did_answer_card)
+            return
+    except Exception:
+        pass
+
+    # Fallback: wrap Reviewer._answerCard
+    try:
+        from aqt.reviewer import Reviewer
+
+        old = getattr(Reviewer, "_answerCard", None)
+        if old is None:
+            return
+
+        def _wrapped_answer(self, ease):
+            try:
+                trigger_answer_submit_popup(int(ease), get_config())
+            except Exception:
+                pass
+            return old(self, ease)
+
+        Reviewer._answerCard = _wrapped_answer
+    except Exception as e:
+        print(f"[StudyCompanion] Failed to install answer hook: {e}")
+
+
 # ============================================================================
 # Register Hooks
 # ============================================================================
@@ -98,6 +137,9 @@ gui_hooks.main_window_did_init.append(_on_main_window_init)
 
 # Inject images/quotes/website into card display
 gui_hooks.card_will_show.append(inject_random_image)
+
+# Queue answer-submit image popups
+_install_answer_submit_hook()
 
 # Handle delete image messages from JavaScript
 gui_hooks.webview_did_receive_js_message.append(_handle_webview_message)
