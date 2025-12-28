@@ -22,7 +22,6 @@ from .image_manager import (
     increment_click_count,
     increment_view_count,
     copy_external_image_into_media,
-    list_external_cached_media_files,
 )
 from .image_manager import get_media_subfolder_path, _load_meta, _save_meta
 from .quotes import get_random_quote, get_unique_random_quotes
@@ -206,25 +205,17 @@ def inject_random_image(text: str, card, kind: str) -> str:
         side = "question"
 
     def _pick_for(side_name: str) -> tuple[str, str, str, list[str], str]:
+        """Pick images for the given side. Returns (src_type, src_val, folder_name, filenames, disk_tag)."""
         st, sv = _resolve_side_source(cfg, side_name)
+        
         if st == "disk":
             tag = "q" if str(side_name).lower().startswith("q") else "a"
-            # Cache-first: prefer already cached external files for this side.
-            cached = list_external_cached_media_files(tag=tag)
-            if cached:
-                if images_count <= 1:
-                    files = [random.choice(cached)]
-                else:
-                    if images_count >= len(cached):
-                        random.shuffle(cached)
-                        files = cached[:images_count]
-                    else:
-                        files = random.sample(cached, images_count)
-                return "disk", sv, "disk", files, tag
-
-            # No cache yet: read from the system folder and copy into media now,
-            # then render using the cached media filenames.
+            
+            # Always pick fresh images from the disk folder, then ensure they're cached
             picked_paths = _pick_from_disk_folder(sv, images_count)
+            if not picked_paths:
+                return "disk", sv, "disk", [], tag
+            
             cached_names: list[str] = []
             for p in picked_paths:
                 try:
@@ -233,8 +224,10 @@ def inject_random_image(text: str, card, kind: str) -> str:
                         cached_names.append(rel)
                 except Exception:
                     pass
+            
             return "disk", sv, "disk", cached_names, tag
 
+        # Media subfolder mode
         folder = sanitize_folder_name(sv)
         cfg_side = dict(cfg)
         cfg_side["folder_name"] = folder
@@ -426,14 +419,33 @@ def inject_random_image(text: str, card, kind: str) -> str:
     imgs_html = ''.join(x for x in images_cells if isinstance(x, str) and x)
     click_js_bool = "true" if click_open else "false"
 
+    # Use unique ID with timestamp to prevent caching issues
+    import time
+    render_id = int(time.time() * 1000)
+    unique_id = f"sc-img-{render_id}"
+    
+    # Determine side marker
+    side_marker = "question" if side == "question" else "answer"
+    
+    # CSS to hide all old containers, only show the latest one
+    hide_old_css = (
+        f"<style id=\"sc-hide-old-{render_id}\">\n"
+        "  .sc-image-container { display: none !important; }\n"
+        f"  #sc-img-{render_id} {{ display: block !important; }}\n"
+        "</style>\n"
+    )
+    
+    # Direct HTML injection (no JS DOM manipulation)
+    # The container has unique ID to ensure fresh content
     extra_html = (
         website_html
-        + "\n" +
-        "<div style=\"text-align:center; margin-top:15px;\" id=\"random-image-container\">\n"
-        "  <div style=\"display:flex; flex-wrap:wrap; justify-content:center; gap:" + str(gap_px) + "px;\">\n"
+        + "\n" + hide_old_css +
+        f"<div id=\"{unique_id}\" class=\"sc-image-container\" data-side=\"{side_marker}\" data-render=\"{render_id}\" "
+        f"style=\"text-align:center; margin-top:15px; display:block !important; visibility:visible !important;\">\n"
+        f"  <div style=\"display:flex !important; flex-wrap:wrap; justify-content:center; gap:{gap_px}px; visibility:visible !important;\">\n"
         + imgs_html +
         "\n  </div>\n</div>\n"
-        + "<script>\n(function() {\n"
+        + f"<script data-sc-render=\"{render_id}\">\n(function() {{\n"
         "  var clickOpen = " + click_js_bool + ";\n"
         "  function send(msg) {\n"
         "    try {\n"
@@ -448,11 +460,11 @@ def inject_random_image(text: str, card, kind: str) -> str:
         "      send('randomImageDelete:' + f1 + '|' + f2);\n"
         "    } catch (e) {}\n"
         "  };\n"
-        "  function attachHandlers() {\n"
-        "    var imgs = document.querySelectorAll('#random-image-container img[data-fullsrc]');\n"
+        f"  var container = document.getElementById('{unique_id}');\n"
+        "  if (container) {\n"
+        "    var imgs = container.querySelectorAll('img[data-fullsrc]');\n"
         "    imgs.forEach(function(i) {\n"
         "      try { i.style.cursor = clickOpen ? 'zoom-in' : 'default'; } catch (e) {}\n"
-        "      if (i._scListenerAdded) return;\n"
         "      i.addEventListener('click', function(ev) {\n"
         "        try { ev.stopPropagation(); } catch (e) {}\n"
         "        try {\n"
@@ -464,13 +476,7 @@ def inject_random_image(text: str, card, kind: str) -> str:
         "          try { var src = this.getAttribute('data-fullsrc'); if (src) send('scOpenImage:' + src); } catch (e) {}\n"
         "        }\n"
         "      });\n"
-        "      i._scListenerAdded = true;\n"
         "    });\n"
-        "  }\n"
-        "  attachHandlers();\n"
-        "  var container = document.getElementById('random-image-container');\n"
-        "  if (container && window.MutationObserver) {\n"
-        "    try { var mo = new MutationObserver(attachHandlers); mo.observe(container, { childList: true, subtree: true }); } catch (e) {}\n"
         "  }\n"
         "})();\n</script>\n"
     )
