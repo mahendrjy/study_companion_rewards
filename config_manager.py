@@ -15,6 +15,14 @@ def get_defaults() -> dict:
         "show_on_question": True,
         "show_on_answer": True,
         "folder_name": "study_companion_images",
+        # Question/Answer image sources.
+        # These may be absolute system folders OR collection.media subfolder names.
+        # If empty, the add-on falls back to folder_name inside collection.media.
+        "question_image_folder": "",
+        "answer_image_folder": "",
+        # Legacy per-side media-only keys (kept for backward compatibility; not shown in UI)
+        "folder_name_question": "",
+        "folder_name_answer": "",
         "max_width_percent": 80,
         "max_height_vh": 60,
         "max_height_unit": "vh",
@@ -81,6 +89,20 @@ def get_config() -> dict:
                 cfg["show_motivation_quotes"] = bool(cfg.get("show_filename"))
             except Exception:
                 cfg["show_motivation_quotes"] = True
+
+        # Backwards-compat: if new Question/Answer keys are unset but old per-side keys exist,
+        # reuse those values.
+        try:
+            if not str(cfg.get("question_image_folder", "") or "").strip():
+                old_q = str(cfg.get("folder_name_question", "") or "").strip()
+                if old_q:
+                    cfg["question_image_folder"] = old_q
+            if not str(cfg.get("answer_image_folder", "") or "").strip():
+                old_a = str(cfg.get("folder_name_answer", "") or "").strip()
+                if old_a:
+                    cfg["answer_image_folder"] = old_a
+        except Exception:
+            pass
         return {**default, **cfg}
     except Exception as e:
         print(f"[StudyCompanion] Failed to load config: {e}")

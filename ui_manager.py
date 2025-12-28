@@ -97,9 +97,9 @@ class SettingsDialog(QDialog):
             lbl.setWordWrap(True)
             img_form.addRow(lbl)
 
-        _section("General")
+        _section("Question / Answer")
 
-        # General settings (moved here because they're primarily about image display)
+        # Core toggles
         self.cb_enabled = QCheckBox("Enable add-on")
         self.cb_enabled.setChecked(bool(self.cfg.get("enabled", True)))
         img_form.addRow(self.cb_enabled)
@@ -112,21 +112,36 @@ class SettingsDialog(QDialog):
         self.cb_a.setChecked(bool(self.cfg.get("show_on_answer", True)))
         img_form.addRow(self.cb_a)
 
-        _section("Card Images")
+        # Two folders for Question/Answer (any system folder OR a collection.media subfolder name)
+        self.le_q_folder = QLineEdit(str(self.cfg.get("question_image_folder", "") or ""))
+        self.le_q_folder.setPlaceholderText("Question images folder")
+        btn_pick_q = QPushButton("Select folder…")
+        btn_open_q = QPushButton("Open folder")
+        qconnect(btn_pick_q.clicked, lambda: self._pick_any_folder_into(self.le_q_folder, "Select Question images folder"))
+        qconnect(btn_open_q.clicked, lambda: self._open_any_folder_from(self.le_q_folder))
+        q_row = QWidget()
+        q_row_l = QHBoxLayout(q_row)
+        q_row_l.setContentsMargins(0, 0, 0, 0)
+        q_row_l.addWidget(self.le_q_folder, 1)
+        q_row_l.addWidget(btn_pick_q)
+        q_row_l.addWidget(btn_open_q)
+        img_form.addRow("Question images folder", q_row)
 
-        self.le_folder = QLineEdit(str(self.cfg.get("folder_name", "study_companion_images")))
-        self.le_folder.setPlaceholderText("study_companion_images")
-        btn_pick_img_folder = QPushButton("Select folder…")
-        btn_open = QPushButton("Open folder")
-        qconnect(btn_pick_img_folder.clicked, self._on_pick_image_folder)
-        qconnect(btn_open.clicked, self._on_open_folder)
-        folder_row = QWidget()
-        folder_layout = QHBoxLayout(folder_row)
-        folder_layout.setContentsMargins(0, 0, 0, 0)
-        folder_layout.addWidget(self.le_folder, 1)
-        folder_layout.addWidget(btn_pick_img_folder)
-        folder_layout.addWidget(btn_open)
-        img_form.addRow("Image folder (inside collection.media)", folder_row)
+        self.le_a_folder = QLineEdit(str(self.cfg.get("answer_image_folder", "") or ""))
+        self.le_a_folder.setPlaceholderText("Answer images folder")
+        btn_pick_a = QPushButton("Select folder…")
+        btn_open_a = QPushButton("Open folder")
+        qconnect(btn_pick_a.clicked, lambda: self._pick_any_folder_into(self.le_a_folder, "Select Answer images folder"))
+        qconnect(btn_open_a.clicked, lambda: self._open_any_folder_from(self.le_a_folder))
+        a_row = QWidget()
+        a_row_l = QHBoxLayout(a_row)
+        a_row_l.setContentsMargins(0, 0, 0, 0)
+        a_row_l.addWidget(self.le_a_folder, 1)
+        a_row_l.addWidget(btn_pick_a)
+        a_row_l.addWidget(btn_open_a)
+        img_form.addRow("Answer images folder", a_row)
+
+        _section("Additional")
 
         self.sp_count = QSpinBox()
         self.sp_count.setRange(1, 12)
@@ -204,7 +219,7 @@ class SettingsDialog(QDialog):
         self.sp_img_radius.setSuffix(" px")
         img_form.addRow("Image corner radius", self.sp_img_radius)
 
-        _section("Answer Submit Popup")
+        _section("Popup")
 
         # Answer-submit image popup
         self.cb_answer_image = QCheckBox(
@@ -246,6 +261,10 @@ class SettingsDialog(QDialog):
         happy_layout.addWidget(btn_pick_happy)
         happy_layout.addWidget(btn_open_happy)
         img_form.addRow("Happy image folder", happy_row)
+
+        popup_note = QLabel("Tip: leave Angry/Happy folders empty to reuse the Answer images folder.")
+        popup_note.setWordWrap(True)
+        img_form.addRow(popup_note)
 
         self.sp_answer_image_duration = QSpinBox()
         self.sp_answer_image_duration.setRange(1, 30)
@@ -455,7 +474,8 @@ class SettingsDialog(QDialog):
         self.cb_q.setChecked(bool(cfg.get("show_on_question", True)))
         self.cb_a.setChecked(bool(cfg.get("show_on_answer", True)))
 
-        self.le_folder.setText(str(cfg.get("folder_name", "study_companion_images")))
+        self.le_q_folder.setText(str(cfg.get("question_image_folder", "") or ""))
+        self.le_a_folder.setText(str(cfg.get("answer_image_folder", "") or ""))
         self.sp_w.setValue(int(cfg.get("max_width_percent", 80) or 0))
         self.sp_h.setValue(int(cfg.get("max_height_vh", 60) or 0))
         unit = str(cfg.get("max_height_unit", "vh")).lower()
@@ -511,8 +531,10 @@ class SettingsDialog(QDialog):
             pass
 
     def _on_save(self):
-        folder = sanitize_folder_name(self.le_folder.text())
-        self.le_folder.setText(folder)
+        q_folder = str(self.le_q_folder.text() or "").strip()
+        a_folder = str(self.le_a_folder.text() or "").strip()
+        self.le_q_folder.setText(q_folder)
+        self.le_a_folder.setText(a_folder)
 
         # These can be either:
         # - absolute folders anywhere on disk (recommended)
@@ -528,7 +550,8 @@ class SettingsDialog(QDialog):
                 "enabled": bool(self.cb_enabled.isChecked()),
                 "show_on_question": bool(self.cb_q.isChecked()),
                 "show_on_answer": bool(self.cb_a.isChecked()),
-                "folder_name": folder,
+                "question_image_folder": q_folder,
+                "answer_image_folder": a_folder,
                 "images_to_show": int(self.sp_count.value()),
                 "avoid_repeat": bool(self.cb_avoid.isChecked()),
                 "show_motivation_quotes": bool(self.cb_quotes.isChecked()),
@@ -582,34 +605,7 @@ class SettingsDialog(QDialog):
             pass
         self.accept()
 
-    def _on_pick_image_folder(self) -> None:
-        try:
-            col = getattr(_mw, "col", None)
-            if not col:
-                return
-            media_dir = col.media.dir()
-            start = media_dir
-            folder = QFileDialog.getExistingDirectory(self, "Select image folder inside collection.media", start)
-            if not folder:
-                return
-
-            # Enforce selection inside collection.media
-            media_dir_real = os.path.realpath(media_dir)
-            folder_real = os.path.realpath(folder)
-            if not folder_real.startswith(media_dir_real + os.sep) and folder_real != media_dir_real:
-                return
-
-            rel = os.path.relpath(folder_real, media_dir_real)
-            rel = rel.replace("\\", "/")
-            rel = sanitize_folder_name(rel)
-            self.le_folder.setText(rel)
-        except Exception:
-            pass
-
-    def _on_open_folder(self) -> None:
-        folder = sanitize_folder_name(self.le_folder.text())
-        self.le_folder.setText(folder)
-        open_images_folder(folder)
+    # NOTE: legacy media-only pick/open helpers removed from UI (still supported via typing a media subfolder name).
 
     def _pick_any_folder_into(self, target: QLineEdit, title: str) -> None:
         try:
@@ -661,7 +657,8 @@ class SettingsDialog(QDialog):
         self.cb_a.setChecked(bool(d.get("show_on_answer", True)))
 
         # Images
-        self.le_folder.setText(str(d.get("folder_name", "study_companion_images")))
+        self.le_q_folder.setText(str(d.get("question_image_folder", "") or ""))
+        self.le_a_folder.setText(str(d.get("answer_image_folder", "") or ""))
         self.sp_count.setValue(int(d.get("images_to_show", 1) or 1))
         self.cb_avoid.setChecked(bool(d.get("avoid_repeat", True)))
         self.cb_quotes.setChecked(bool(d.get("show_motivation_quotes", True)))

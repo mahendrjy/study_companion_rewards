@@ -13,6 +13,7 @@ from aqt.qt import (
     Qt,
     QWidget,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QHBoxLayout,
     QScrollArea,
@@ -38,6 +39,7 @@ class _ImagePopup(QWidget):
 
         self._zoom_overlay: _ZoomOverlay | None = None
         self._current_image_path: str | None = None
+        self._delete_path: str | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -49,13 +51,48 @@ class _ImagePopup(QWidget):
         )
         root.addWidget(self._img)
 
-    def show_image(self, image_path: str, duration_ms: int, cfg: dict) -> None:
+        footer = QWidget()
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(10, 8, 10, 10)
+
+        self._quote = QLabel("")
+        self._quote.setWordWrap(True)
+        self._quote.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._quote.setStyleSheet("QLabel { color: rgba(255,255,255,0.92); font-style: italic; }")
+        footer_layout.addWidget(self._quote, 1)
+
+        self._delete_btn = QPushButton("🗑️ Delete")
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setStyleSheet(
+            "QPushButton { background: rgba(255,107,107,0.20); color: rgba(255,255,255,0.95); border: 1px solid rgba(255,107,107,0.40); border-radius: 8px; padding: 6px 10px; }"
+            "QPushButton:hover { background: rgba(255,107,107,0.28); }"
+            "QPushButton:pressed { background: rgba(255,107,107,0.34); }"
+        )
+        self._delete_btn.clicked.connect(self._on_delete_clicked)  # type: ignore[attr-defined]
+        footer_layout.addWidget(self._delete_btn, 0)
+
+        root.addWidget(footer)
+
+    def show_image(self, image_path: str, duration_ms: int, cfg: dict, quote_text: str | None = None, delete_path: str | None = None) -> None:
         if not image_path:
             return
         if not os.path.exists(image_path):
             return
 
         self._current_image_path = image_path
+        self._delete_path = delete_path or image_path
+
+        qt = (quote_text or "").strip()
+        try:
+            self._quote.setText(qt)
+            self._quote.setVisible(bool(qt))
+        except Exception:
+            pass
+
+        try:
+            self._delete_btn.setVisible(bool(self._delete_path))
+        except Exception:
+            pass
 
         pix = QPixmap(image_path)
         if pix.isNull():
@@ -132,6 +169,25 @@ class _ImagePopup(QWidget):
 
         if duration_ms > 0:
             self._timer.start(int(duration_ms))
+
+    def _on_delete_clicked(self) -> None:
+        # Delete the underlying image file (best-effort), then close the popup.
+        try:
+            path = self._delete_path
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+        try:
+            if self._zoom_overlay and self._zoom_overlay.isVisible():
+                self._zoom_overlay.close()
+                self._zoom_overlay = None
+        except Exception:
+            pass
+        try:
+            self.hide()
+        except Exception:
+            pass
 
     def _center_on_main(self) -> None:
         try:
@@ -393,6 +449,14 @@ def show_answer_popup(image_path: str, duration_ms: int, cfg: dict) -> None:
     if _popup_singleton is None:
         _popup_singleton = _ImagePopup()
     _popup_singleton.show_image(image_path, duration_ms, cfg)
+
+
+def show_answer_popup_with_quote(image_path: str, duration_ms: int, cfg: dict, quote_text: str, delete_path: str | None = None) -> None:
+    """Backward-compatible helper for callers that want quote + delete support."""
+    global _popup_singleton
+    if _popup_singleton is None:
+        _popup_singleton = _ImagePopup()
+    _popup_singleton.show_image(image_path, duration_ms, cfg, quote_text=quote_text, delete_path=delete_path)
 
 
 def show_fullscreen_image(image_path: str) -> None:

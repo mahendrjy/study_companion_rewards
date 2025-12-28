@@ -21,6 +21,8 @@ from .image_manager import (
     get_prioritized_files,
     increment_click_count,
     increment_view_count,
+    copy_external_image_into_media,
+    list_external_cached_media_files,
 )
 from .image_manager import get_media_subfolder_path, _load_meta, _save_meta
 from .quotes import get_random_quote, get_unique_random_quotes
@@ -28,6 +30,56 @@ from .quotes import get_random_quote, get_unique_random_quotes
 
 _VALID_IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg")
 _ANSWER_POPUP_MEDIA_FOLDER = "study_companion_answer_popup"
+
+
+def _list_disk_images(folder_path: str) -> list[str]:
+    try:
+        files: list[str] = []
+        for root, _dirs, names in os.walk(folder_path):
+            for n in names:
+                if n.lower().endswith(_VALID_IMG_EXT):
+                    files.append(os.path.join(root, n))
+        return files
+    except Exception:
+        return []
+
+
+def _pick_from_disk_folder(folder_path: str, count: int) -> list[str]:
+    files = _list_disk_images(folder_path)
+    if not files:
+        return []
+    if count <= 1:
+        return [random.choice(files)]
+    if count >= len(files):
+        random.shuffle(files)
+        return files[:count]
+    return random.sample(files, count)
+
+
+def _resolve_side_source(cfg: dict, side: str) -> tuple[str, str]:
+    """Return (source_type, value). source_type: 'disk' or 'media'."""
+    side_l = str(side or "").lower()
+    key = "question_image_folder" if side_l.startswith("q") else "answer_image_folder"
+    other_key = "answer_image_folder" if side_l.startswith("q") else "question_image_folder"
+    raw = str(cfg.get(key, "") or "").strip()
+    if not raw:
+        # If one side isn't configured, reuse the other side.
+        raw = str(cfg.get(other_key, "") or "").strip()
+    if raw:
+        disk_folder = _resolve_existing_folder(raw)
+        if disk_folder:
+            return "disk", disk_folder
+        # otherwise treat it as a media subfolder name
+        return "media", sanitize_folder_name(raw)
+
+    # Fallback: legacy per-side media-only keys
+    legacy_key = "folder_name_question" if side_l.startswith("q") else "folder_name_answer"
+    legacy = str(cfg.get(legacy_key, "") or "").strip()
+    if legacy:
+        return "media", sanitize_folder_name(legacy)
+
+    # Final fallback: the legacy single media folder
+    return "media", sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
 
 
 def trigger_answer_submit_popup(ease: int, cfg: dict | None = None) -> None:
@@ -47,8 +99,11 @@ def trigger_answer_submit_popup(ease: int, cfg: dict | None = None) -> None:
             folder = str(cfg.get("answer_image_happy_folder", "") or "").strip()
         else:
             return
+
+        # If the user didn't set angry/happy folders, reuse the Answer-side source.
         if not folder:
-            return
+            src_type, src_val = _resolve_side_source(cfg, "answer")
+            folder = src_val if src_type == "disk" else sanitize_folder_name(src_val)
 
         duration_s = int(cfg.get("answer_image_duration_seconds", 3) or 3)
         if duration_s < 1:
@@ -60,10 +115,17 @@ def trigger_answer_submit_popup(ease: int, cfg: dict | None = None) -> None:
         if not image_path:
             return
 
-        # Show Qt popup (centered, click-to-zoom)
-        from .answer_popup import show_answer_popup
+        # Quote + delete button in the Qt popup
+        quote_text = ""
+        try:
+            quote_text = get_random_quote() or ""
+        except Exception:
+            quote_text = ""
 
-        show_answer_popup(image_path, int(duration_s * 1000), cfg)
+        # Show Qt popup (centered, click-to-zoom)
+        from .answer_popup import show_answer_popup_with_quote
+
+        show_answer_popup_with_quote(image_path, int(duration_s * 1000), cfg, quote_text=quote_text, delete_path=image_path)
     except Exception:
         return
 
@@ -87,14 +149,8 @@ def _pick_answer_popup_image_file(folder: str, cfg: dict) -> str | None:
         return None
 
     fname = filenames[0]
-    rel_src = fname
-    try:
-        rel_src = ensure_optimized_copy(image_folder_path, fname) or fname
-    except Exception:
-        rel_src = fname
-
-    full = os.path.join(image_folder_path, rel_src)
-    return full if os.path.exists(full) else os.path.join(image_folder_path, fname)
+    full = os.path.join(image_folder_path, fname)
+    return full if os.path.exists(full) else None
 
 
 _current_card_id: int | None = None
@@ -140,14 +196,73 @@ def inject_random_image(text: str, card, kind: str) -> str:
     website_display_mode = str(cfg.get("website_display_mode", "mobile")).lower()
 
     images_count = int(cfg.get("images_to_show", 1) or 1)
-    filenames = pick_random_image_filenames(cfg, images_count)
-    # Ensure filenames is iterable even if picker returned None
+
+    kind_s = str(kind or "")
+    if kind_s.endswith("Question"):
+        side = "question"
+    elif kind_s.endswith("Answer"):
+        side = "answer"
+    else:
+        side = "question"
+
+    def _pick_for(side_name: str) -> tuple[str, str, str, list[str], str]:
+        st, sv = _resolve_side_source(cfg, side_name)
+        if st == "disk":
+            tag = "q" if str(side_name).lower().startswith("q") else "a"
+            # Cache-first: prefer already cached external files for this side.
+            cached = list_external_cached_media_files(tag=tag)
+            if cached:
+                if images_count <= 1:
+                    files = [random.choice(cached)]
+                else:
+                    if images_count >= len(cached):
+                        random.shuffle(cached)
+                        files = cached[:images_count]
+                    else:
+                        files = random.sample(cached, images_count)
+                return "disk", sv, "disk", files, tag
+
+            # No cache yet: read from the system folder and copy into media now,
+            # then render using the cached media filenames.
+            picked_paths = _pick_from_disk_folder(sv, images_count)
+            cached_names: list[str] = []
+            for p in picked_paths:
+                try:
+                    rel = copy_external_image_into_media(p, tag=tag)
+                    if rel:
+                        cached_names.append(rel)
+                except Exception:
+                    pass
+            return "disk", sv, "disk", cached_names, tag
+
+        folder = sanitize_folder_name(sv)
+        cfg_side = dict(cfg)
+        cfg_side["folder_name"] = folder
+        files = pick_random_image_filenames(cfg_side, images_count) or []
+        return st, sv, folder, files, ""
+
+    src_type, src_val, folder_name, filenames, disk_tag = _pick_for(side)
+
+    # If empty, try the other side as a fallback (common when only one folder is configured)
     if not filenames:
-        filenames = []
+        other_side = "answer" if side == "question" else "question"
+        src_type, src_val, folder_name, filenames, disk_tag = _pick_for(other_side)
+
+    # Final fallback: legacy shared media folder
+    if not filenames:
+        try:
+            folder_name = sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
+            cfg_side = dict(cfg)
+            cfg_side["folder_name"] = folder_name
+            src_type = "media"
+            src_val = folder_name
+            filenames = pick_random_image_filenames(cfg_side, images_count) or []
+        except Exception:
+            filenames = []
 
     # behavior/emotion features removed
 
-    folder_name = sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
+    # folder_name already resolved above based on card side
 
     max_w = cfg.get("max_width_percent", 80)
     max_h_value = cfg.get("max_height_vh", 60)
@@ -186,17 +301,19 @@ def inject_random_image(text: str, card, kind: str) -> str:
     columns = min(max_columns, max(1, images_count))
     cell_width_css = f"calc({100/columns:.4f}% - 12px)"
     
-    # increment view counts for selected filenames
-    try:
-        image_folder_path = get_media_subfolder_path(folder_name) or ""
-        if image_folder_path:
-            for fn in filenames:
-                try:
-                    increment_view_count(image_folder_path, fn)
-                except Exception:
-                    pass
-    except Exception:
-        image_folder_path = ""
+    # increment view counts for selected filenames (media only)
+    image_folder_path = ""
+    if src_type != "disk":
+        try:
+            image_folder_path = get_media_subfolder_path(folder_name) or ""
+            if image_folder_path:
+                for fn in filenames:
+                    try:
+                        increment_view_count(image_folder_path, fn)
+                    except Exception:
+                        pass
+        except Exception:
+            image_folder_path = ""
 
     for idx, fname in enumerate(filenames):
         # Insert website in mobile mode after first image
@@ -206,17 +323,32 @@ def inject_random_image(text: str, card, kind: str) -> str:
                 images_cells.append(website_cell)
                 quote_index += 1
 
-        # prefer optimized cached copy if available
-        rel_src = fname
-        try:
-            if image_folder_path:
-                rel_src = ensure_optimized_copy(image_folder_path, fname) or fname
-        except Exception:
+        if src_type == "disk":
+            # Disk sources are rendered via cached media filenames.
+            rel_media = str(fname)
+            if not rel_media:
+                continue
+            title_attr_i = html.escape(rel_media, quote=True)
+            img_src_i = urlquote(rel_media, safe='/')
+            data_folder = "disk"
+            data_fname_raw = rel_media
+            filename_escaped_i = html.escape(rel_media, quote=True)
+            folder_attr = "disk"
+        else:
+            # prefer optimized cached copy if available
             rel_src = fname
+            try:
+                if image_folder_path:
+                    rel_src = ensure_optimized_copy(image_folder_path, fname) or fname
+            except Exception:
+                rel_src = fname
 
-        img_src_i = f"{folder_name}/{urlquote(rel_src, safe='/')}"
-        title_attr_i = html.escape(fname, quote=True)
-        filename_escaped_i = html.escape(fname, quote=True)
+            img_src_i = f"{folder_name}/{urlquote(rel_src, safe='/')}"
+            title_attr_i = html.escape(fname, quote=True)
+            data_folder = folder_name
+            data_fname_raw = fname
+            filename_escaped_i = html.escape(fname, quote=True)
+            folder_attr = html.escape(folder_name, quote=True)
 
         # Image styling
         use_custom_w = bool(cfg.get("use_custom_width", False))
@@ -258,16 +390,16 @@ def inject_random_image(text: str, card, kind: str) -> str:
 
         # Quote and delete button row
         quote_delete_row = _build_quote_delete_row(
-            show_quotes, quote_index, unique_quotes, filename_escaped_i
+            show_quotes, quote_index, unique_quotes, data_folder, filename_escaped_i
         )
         quote_index += 1 if show_quotes and quote_index < len(unique_quotes) else 0
 
         # Include data-fullsrc and data-filename attributes so JS can open the image in fullscreen
         data_fullsrc = html.escape(img_src_i, quote=True)
-        data_fname = html.escape(fname, quote=True)
+        data_fname = html.escape(str(data_fname_raw), quote=True)
         cell_html = (
             f"<div style=\"flex:0 0 {cell_width_css}; max-width:{cell_width_css}; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center;\">"
-            f"<img src=\"{img_src_i}\" data-fullsrc=\"{data_fullsrc}\" data-filename=\"{data_fname}\" style=\"{img_style}\" title=\"{title_attr_i}\">"
+            f"<img src=\"{img_src_i}\" data-fullsrc=\"{data_fullsrc}\" data-filename=\"{html.escape(data_fname_raw, quote=True)}\" data-folder=\"{folder_attr}\" style=\"{img_style}\" title=\"{title_attr_i}\">"
             f"{quote_delete_row}"
             f"</div>"
         )
@@ -302,63 +434,45 @@ def inject_random_image(text: str, card, kind: str) -> str:
         + imgs_html +
         "\n  </div>\n</div>\n"
         + "<script>\n(function() {\n"
-        "      if (!src) return;\n"
-        "      try {\n"
-        "        if (typeof pycmd !== 'undefined') { pycmd('scOpenImage:' + src); return; }\n"
-        "        if (typeof window.pycmd !== 'undefined') { window.pycmd('scOpenImage:' + src); return; }\n"
-        "      } catch (e) {}\n"
-        "      slider.addEventListener('input', function(ev) { swallow(ev); applyZoom(); });\n"
-        "      slider.addEventListener('change', function(ev) { swallow(ev); applyZoom(); });\n"
-        "      sliderLabel.addEventListener('mousedown', swallow);\n"
-        "      sliderLabel.addEventListener('mouseup', swallow);\n"
-        "      sliderLabel.addEventListener('click', swallow);\n"
-        "      wrap.appendChild(img);\n"
-        "      sliderWrap.appendChild(sliderLabel);\n"
-        "      sliderWrap.appendChild(slider);\n"
-        "      overlay.appendChild(wrap);\n"
-        "      overlay.appendChild(closeBtn);\n"
-        "      overlay.appendChild(sliderWrap);\n"
-        "      document.body.appendChild(overlay);\n"
-        "      applyZoom();\n"
-        "    }\n"
-        "    function attachHandlers() {\n"
-        "      var imgs = document.querySelectorAll('#random-image-container img[data-fullsrc]');\n"
-        "      imgs.forEach(function(i) {\n"
-        "        i.style.cursor = 'zoom-in';\n"
-        "        if (!i._scListenerAdded) {\n"
-        "          i.addEventListener('click', function(ev) {\n"
-        "            ev.stopPropagation();\n"
-        "            try {\n"
-        "              var fname = this.getAttribute('data-filename');\n"
-        "              if (typeof pycmd !== 'undefined') { pycmd('randomImageClicked:' + fname); }\n"
-        "              else if (typeof window.pycmd !== 'undefined') { window.pycmd('randomImageClicked:' + fname); }\n"
-        "            } catch (e) {}\n"
-        "            openImageFullscreen(this.getAttribute('data-fullsrc'));\n"
-        "          });\n"
-        "          i._scListenerAdded = true;\n"
+        "  var clickOpen = " + click_js_bool + ";\n"
+        "  function send(msg) {\n"
+        "    try {\n"
+        "      if (typeof pycmd !== 'undefined') { pycmd(msg); return; }\n"
+        "      if (typeof window.pycmd !== 'undefined') { window.pycmd(msg); return; }\n"
+        "    } catch (e) {}\n"
+        "  }\n"
+        "  window.deleteRandomImage = function(folder, fname) {\n"
+        "    try {\n"
+        "      var f1 = encodeURIComponent(String(folder || ''));\n"
+        "      var f2 = encodeURIComponent(String(fname || ''));\n"
+        "      send('randomImageDelete:' + f1 + '|' + f2);\n"
+        "    } catch (e) {}\n"
+        "  };\n"
+        "  function attachHandlers() {\n"
+        "    var imgs = document.querySelectorAll('#random-image-container img[data-fullsrc]');\n"
+        "    imgs.forEach(function(i) {\n"
+        "      try { i.style.cursor = clickOpen ? 'zoom-in' : 'default'; } catch (e) {}\n"
+        "      if (i._scListenerAdded) return;\n"
+        "      i.addEventListener('click', function(ev) {\n"
+        "        try { ev.stopPropagation(); } catch (e) {}\n"
+        "        try {\n"
+        "          var folder = this.getAttribute('data-folder') || '';\n"
+        "          var fname = this.getAttribute('data-filename') || '';\n"
+        "          send('randomImageClicked:' + encodeURIComponent(folder) + '|' + encodeURIComponent(fname));\n"
+        "        } catch (e) {}\n"
+        "        if (clickOpen) {\n"
+        "          try { var src = this.getAttribute('data-fullsrc'); if (src) send('scOpenImage:' + src); } catch (e) {}\n"
         "        }\n"
         "      });\n"
-        "    }\n"
-        "    attachHandlers();\n"
-        "    function preloadAll() {\n"
-        "      var imgs = document.querySelectorAll('#random-image-container img[data-fullsrc]');\n"
-        "      imgs.forEach(function(i) { try { var src = i.getAttribute('data-fullsrc'); if (src) { var p = new Image(); p.src = src; } } catch (e) {} });\n"
-        "    }\n"
-        "    preloadAll();\n"
-        "    var container = document.getElementById('random-image-container');\n"
-        "    if (container && window.MutationObserver) { var mo = new MutationObserver(attachHandlers); mo.observe(container, { childList: true, subtree: true }); }\n"
-        "    window.openImageFullscreen = openImageFullscreen;\n"
-        "  })();\n"
-        # orientation-aware single image: apply appropriate sizing for portrait vs landscape
-        + (
-            "\n    var autoOrient = "
-            + ("true" if bool(cfg.get("auto_orient_single_image", True)) else "false")
-            + ";\n    var maxHVal = " + str(int(max_h_value)) + ";\n    var maxHUnit = '" + max_h_unit + "';\n"
-            "    if (autoOrient) {\n"
-            "      var imgs = document.querySelectorAll('#random-image-container img[data-fullsrc]');\n"
-            "      if (imgs.length === 1) { var i = imgs[0]; function adjustOrient() { try { var w = i.naturalWidth || i.width; var h = i.naturalHeight || i.height; if (h > w) { i.style.width = 'auto'; i.style.maxHeight = maxHVal + (maxHUnit==='vh' ? 'vh' : '%'); i.style.height = 'auto'; i.style.objectFit = 'contain'; i.style.objectPosition = 'center center'; } else { i.style.width = '100%'; i.style.height = 'auto'; i.style.objectFit = 'contain'; i.style.objectPosition = 'center center'; } } catch(e){} } if (i.complete) adjustOrient(); else i.addEventListener('load', adjustOrient); }\n    }\n"
-        )
-        + "})();\n</script>\n"
+        "      i._scListenerAdded = true;\n"
+        "    });\n"
+        "  }\n"
+        "  attachHandlers();\n"
+        "  var container = document.getElementById('random-image-container');\n"
+        "  if (container && window.MutationObserver) {\n"
+        "    try { var mo = new MutationObserver(attachHandlers); mo.observe(container, { childList: true, subtree: true }); } catch (e) {}\n"
+        "  }\n"
+        "})();\n</script>\n"
     )
 
     # Inject answer-submit popup (if queued) on the next question render
@@ -643,7 +757,7 @@ def _copy_answer_popup_image_into_media(src_path: str) -> str | None:
         return None
 
 
-def _build_quote_delete_row(show_quotes: bool, quote_index: int, quotes: list[str], filename_escaped: str) -> str:
+def _build_quote_delete_row(show_quotes: bool, quote_index: int, quotes: list[str], folder_name: str, filename_escaped: str) -> str:
     """Build the quote and delete button row for an image.
 
     This function avoids using Python f-strings that contain JS braces
@@ -651,12 +765,13 @@ def _build_quote_delete_row(show_quotes: bool, quote_index: int, quotes: list[st
     insertion into JS string literals.
     """
     # escape backslashes and single quotes for safe JS single-quoted literals
+    js_folder = str(folder_name or "").replace("\\", "\\\\").replace("'", "\\'")
     js_fname = filename_escaped.replace("\\", "\\\\").replace("'", "\\'")
     # common buttons HTML (delete) only
     delete_btn = (
-        "<button onclick=\"deleteRandomImage('{}')\" "
+        "<button onclick=\"deleteRandomImage('{}','{}')\" "
         "style=\"background:transparent; border:none; cursor:pointer; padding:0 6px; font-size:0.9em; color:#ff6b6b;\" "
-        "title=\"Delete\">🗑️</button>".format(js_fname)
+        "title=\"Delete\">🗑️</button>".format(js_folder, js_fname)
     )
     fav_btn = ""
     bl_btn = ""

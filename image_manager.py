@@ -6,6 +6,7 @@ Handles image file selection, deletion, and cycle state.
 import os
 import json
 import random
+import hashlib
 from aqt import mw
 from aqt.utils import showInfo
 
@@ -20,6 +21,168 @@ _cycle_state_path: str | None = None
 _last_filename: str | None = None
 _meta_filename = ".study_companion_meta.json"
 _cache_dirname = ".study_companion_cache"
+
+# External/system-folder images are copied into collection.media so they can be shown on cards.
+# For reliability, cache copies are stored at the media root using a stable hashed name.
+# We also support per-side caches by tag (e.g. 'q' or 'a').
+_external_prefix = "sc_ext_"  # legacy
+_external_map_filename = ".study_companion_external_map.json"
+
+
+def list_external_cached_media_files(tag: str | None = None) -> list[str]:
+    """Return cached external-image filenames in collection.media root.
+
+    If tag is provided (e.g. 'q' or 'a'), return only those cached with that tag.
+    """
+    try:
+        col = getattr(mw, "col", None)
+        if not col:
+            return []
+        media_dir = col.media.dir()
+        try:
+            entries = os.listdir(media_dir)
+        except Exception:
+            return []
+        out: list[str] = []
+        tag_s = str(tag or "").strip().lower()
+        wanted_prefix = f"sc_ext_{tag_s}_" if tag_s else ""
+        for n in entries:
+            if not n:
+                continue
+            ns = str(n)
+            if wanted_prefix:
+                if not ns.startswith(wanted_prefix):
+                    continue
+            else:
+                # any cached external file (legacy or tagged)
+                if not (ns.startswith(_external_prefix) or ns.startswith("sc_ext_q_") or ns.startswith("sc_ext_a_")):
+                    continue
+            if ns.lower().endswith(VALID_EXT):
+                out.append(ns)
+        return out
+    except Exception:
+        return []
+
+
+def _external_map_path(media_dir: str) -> str:
+    return os.path.join(media_dir, _external_map_filename)
+
+
+def _load_external_map(media_dir: str) -> dict:
+    try:
+        path = _external_map_path(media_dir)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        # Backwards-compat: older versions stored the map inside a subfolder.
+        try:
+            legacy_path = os.path.join(media_dir, "study_companion_external_images", _external_map_filename)
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+
+def _save_external_map(media_dir: str, data: dict) -> None:
+    try:
+        path = _external_map_path(media_dir)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[StudyCompanion] Failed to save external map: {e}")
+
+
+def copy_external_image_into_media(src_path: str, tag: str | None = None) -> str | None:
+    """Copy a system-folder image into collection.media; return media filename.
+
+    We store copies in the media root (not a subfolder) because it's the most
+    compatible way to display images inside Anki's reviewer webview.
+    """
+    try:
+        col = getattr(mw, "col", None)
+        if not col:
+            return None
+        if not src_path or not os.path.exists(src_path):
+            return None
+
+        media_dir = col.media.dir()
+        st = os.stat(src_path)
+        ext = os.path.splitext(src_path)[1].lower() or ".png"
+
+        h = hashlib.sha1()
+        h.update(os.path.abspath(src_path).encode("utf-8", errors="ignore"))
+        h.update(str(int(st.st_mtime)).encode("utf-8"))
+        h.update(str(int(st.st_size)).encode("utf-8"))
+        tag_s = str(tag or "").strip().lower()
+        prefix = f"sc_ext_{tag_s}_" if tag_s else _external_prefix
+        name = prefix + h.hexdigest() + ext
+
+        dest_path = os.path.join(media_dir, name)
+        if not os.path.exists(dest_path):
+            # copy into media cache
+            import shutil
+
+            shutil.copy2(src_path, dest_path)
+
+        rel = os.path.basename(dest_path)
+
+        # Persist mapping so delete can remove original too.
+        data = _load_external_map(media_dir)
+        data[rel] = os.path.abspath(src_path)
+        _save_external_map(media_dir, data)
+
+        return rel
+    except Exception as e:
+        print(f"[StudyCompanion] copy_external_image_into_media error: {e}")
+        return None
+
+
+def delete_external_cached_image(rel_media_path: str) -> bool:
+    """Delete a cached external image and (best-effort) its original source file."""
+    try:
+        col = getattr(mw, "col", None)
+        if not col:
+            return False
+        media_dir = col.media.dir()
+
+        rel = str(rel_media_path or "").lstrip("/\\")
+        if not rel:
+            return False
+
+        data = _load_external_map(media_dir)
+        original = data.get(rel)
+
+        # Delete cached copy
+        try:
+            cached_full = os.path.join(media_dir, rel)
+            if os.path.exists(cached_full):
+                os.remove(cached_full)
+        except Exception:
+            pass
+
+        # Delete original (if still exists)
+        try:
+            if isinstance(original, str) and original and os.path.exists(original):
+                os.remove(original)
+        except Exception:
+            pass
+
+        # Remove mapping entry
+        if rel in data:
+            try:
+                del data[rel]
+                _save_external_map(media_dir, data)
+            except Exception:
+                pass
+
+        return True
+    except Exception as e:
+        print(f"[StudyCompanion] delete_external_cached_image error: {e}")
+        return False
 
 
 def _load_cycle_state(state_path: str):
@@ -96,15 +259,22 @@ def open_images_folder(folder_name: str | None = None) -> None:
     openFolder(path)
 
 
-def delete_image_file(filename: str, cfg: dict) -> bool:
-    """Delete an image file and remove it from cycle state. Returns True if successful."""
+def delete_image_file(filename: str, cfg: dict, folder_name_override: str | None = None) -> bool:
+    """Delete an image file and remove it from cycle state.
+
+    If folder_name_override is provided, delete from that media subfolder
+    (sanitized) instead of cfg['folder_name'].
+
+    Returns True if successful.
+    """
     global _cycle_known_set, _cycle_remaining, _cycle_state_path
     try:
         col = getattr(mw, "col", None)
         if not col:
             return False
 
-        folder_name = sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
+        folder_raw = folder_name_override if folder_name_override is not None else cfg.get("folder_name", "study_companion_images")
+        folder_name = sanitize_folder_name(folder_raw)
         image_folder = get_media_subfolder_path(folder_name)
         if not image_folder:
             return False

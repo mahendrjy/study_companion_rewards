@@ -16,6 +16,7 @@ from aqt import gui_hooks, mw
 from .config_manager import get_config
 from .image_manager import (
     delete_image_file,
+    delete_external_cached_image,
     increment_click_count,
     sanitize_folder_name,
     get_media_subfolder_path,
@@ -49,14 +50,60 @@ def _handle_webview_message(handled, message, context):
         return (True, None)
 
     if isinstance(message, str) and message.startswith("randomImageDelete:"):
-        filename = message[len("randomImageDelete:"):]
+        payload = message[len("randomImageDelete:"):]
+        folder_part = ""
+        filename_part = payload
+        if "|" in payload:
+            folder_part, filename_part = payload.split("|", 1)
+        folder_part = urlunquote(str(folder_part or ""))
+        filename_part = urlunquote(str(filename_part or ""))
         cfg = get_config()
-        if delete_image_file(filename, cfg):
-            # Re-render the card without doing a full webview reload
-            if hasattr(mw, "reviewer") and mw.reviewer:
-                reviewer = mw.reviewer
+        # Special: 'disk' means the file shown came from a system folder and was cached into media.
+        if str(folder_part).strip().lower() == "disk":
+            try:
+                delete_external_cached_image(filename_part)
+            except Exception:
+                pass
+        else:
+            folder_override = None
+            try:
+                folder_override = sanitize_folder_name(folder_part) if folder_part.strip() else None
+            except Exception:
+                folder_override = None
+            delete_image_file(filename_part, cfg, folder_name_override=folder_override)
+
+        # Re-render the card without doing a full webview reload, staying on the same side.
+        if hasattr(mw, "reviewer") and mw.reviewer:
+            reviewer = mw.reviewer
+            try:
+                state = None
                 try:
-                    if hasattr(reviewer, "card") and reviewer.card:
+                    state = getattr(reviewer, "state", None)
+                except Exception:
+                    state = None
+                if state is None:
+                    try:
+                        state = getattr(reviewer, "_state", None)
+                    except Exception:
+                        state = None
+
+                state_s = str(state or "").lower()
+                want_answer = state_s.startswith("answer") or state_s == "a"
+
+                if hasattr(reviewer, "card") and reviewer.card:
+                    if want_answer:
+                        try:
+                            reviewer._showAnswer()
+                        except Exception:
+                            try:
+                                reviewer._showQuestion()
+                            except Exception:
+                                if hasattr(reviewer, "web") and reviewer.web:
+                                    try:
+                                        reviewer.web.eval("location.reload();")
+                                    except Exception:
+                                        pass
+                    else:
                         try:
                             reviewer._showQuestion()
                         except Exception:
@@ -68,26 +115,33 @@ def _handle_webview_message(handled, message, context):
                                         reviewer.web.eval("location.reload();")
                                     except Exception:
                                         pass
-                    else:
-                        if hasattr(reviewer, "web") and reviewer.web:
-                            try:
-                                reviewer.web.eval("location.reload();")
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                else:
+                    if hasattr(reviewer, "web") and reviewer.web:
+                        try:
+                            reviewer.web.eval("location.reload();")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         return (True, None)
     # favorite/blacklist features removed
     if isinstance(message, str) and message.startswith("randomImageClicked:"):
-        filename = message[len("randomImageClicked:"):]
+        payload = message[len("randomImageClicked:"):]
+        folder_part = ""
+        filename_part = payload
+        if "|" in payload:
+            folder_part, filename_part = payload.split("|", 1)
+        folder_part = urlunquote(str(folder_part or ""))
+        filename_part = urlunquote(str(filename_part or ""))
         cfg = get_config()
-        folder_name = sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
-        image_folder = get_media_subfolder_path(folder_name)
-        if image_folder:
-            try:
-                increment_click_count(image_folder, filename)
-            except Exception:
-                pass
+        if str(folder_part).strip().lower() != "disk":
+            folder_name = sanitize_folder_name(folder_part) if folder_part.strip() else sanitize_folder_name(cfg.get("folder_name", "study_companion_images"))
+            image_folder = get_media_subfolder_path(folder_name)
+            if image_folder:
+                try:
+                    increment_click_count(image_folder, filename_part)
+                except Exception:
+                    pass
         return (True, None)
     # video feature removed
     return handled
