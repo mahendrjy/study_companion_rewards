@@ -742,14 +742,41 @@ def show_settings():
         exec_fn()
 
 
+_TOOLS_ACTION_OBJECT_NAME = "studyCompanionSettingsAction"
+
+
+def _tools_menu() -> object | None:
+    try:
+        return getattr(mw.form, "menuTools", None) or getattr(mw.form, "toolsMenu", None)
+    except Exception:
+        return None
+
+
+def _has_tools_action(menu) -> bool:
+    try:
+        for a in list(menu.actions() or []):
+            try:
+                if getattr(a, "objectName", None) and a.objectName() == _TOOLS_ACTION_OBJECT_NAME:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 def register_config_action() -> None:
     try:
         mw.addonManager.setConfigAction(__name__.split(".")[0], show_settings)
     except Exception:
         try:
-            menu = getattr(mw.form, "menuTools", None) or getattr(mw.form, "toolsMenu", None)
-            if menu is not None:
+            menu = _tools_menu()
+            if menu is not None and not _has_tools_action(menu):
                 act = QAction("StudyCompanion Settings…", mw)
+                try:
+                    act.setObjectName(_TOOLS_ACTION_OBJECT_NAME)
+                except Exception:
+                    pass
                 qconnect(act.triggered, show_settings)
                 menu.addAction(act)
         except Exception:
@@ -758,14 +785,14 @@ def register_config_action() -> None:
 
 def register_tools_menu() -> None:
     try:
-        menu = getattr(mw.form, "menuTools", None)
-        if menu:
+        menu = _tools_menu()
+        if menu and not _has_tools_action(menu):
             action = QAction("StudyCompanion Settings…", mw)
+            try:
+                action.setObjectName(_TOOLS_ACTION_OBJECT_NAME)
+            except Exception:
+                pass
             qconnect(action.triggered, show_settings)
             menu.addAction(action)
     except Exception:
         pass
-
-
-register_config_action()
-register_tools_menu()

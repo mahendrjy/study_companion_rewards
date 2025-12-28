@@ -18,6 +18,7 @@ from aqt.qt import (
     QScrollArea,
     QTimer,
     QPixmap,
+    QSlider,
 )
 
 
@@ -185,6 +186,33 @@ class _ClickableLabel(QLabel):
             event.accept()
         except Exception:
             pass
+
+
+class _CloseLabel(QLabel):
+    def mousePressEvent(self, event):  # noqa: N802
+        try:
+            event.accept()
+        except Exception:
+            pass
+        try:
+            w = self.window()
+            if w is not None:
+                w.close()
+        except Exception:
+            pass
+
+
+class _ZoomImageLabel(QLabel):
+    def __init__(self, overlay: "_ZoomOverlay"):
+        super().__init__()
+        self._overlay = overlay
+
+    def mousePressEvent(self, event):  # noqa: N802
+        try:
+            event.accept()
+        except Exception:
+            pass
+        # Do not close or toggle on image clicks.
         try:
             w = self.window()
             if w is not None:
@@ -214,6 +242,13 @@ class _ZoomOverlay(QWidget):
             geo = screen.availableGeometry()
             self.setGeometry(geo)
 
+        self._pix = QPixmap(image_path)
+        self._zoom_pct: int = 0  # 0 = fit, else percent of natural size
+        self._scroll: QScrollArea | None = None
+        self._img: QLabel | None = None
+        self._slider: QSlider | None = None
+        self._slider_label: QLabel | None = None
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
@@ -222,7 +257,28 @@ class _ZoomOverlay(QWidget):
         bg_layout = QVBoxLayout(self._bg)
         bg_layout.setContentsMargins(20, 20, 20, 20)
 
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 8)
+
+        self._slider_label = QLabel("Fit")
+        self._slider_label.setStyleSheet("QLabel { color: white; }")
+        header_layout.addWidget(self._slider_label)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider = slider
+        slider.setRange(0, 300)
+        slider.setSingleStep(25)
+        slider.setPageStep(25)
+        slider.setValue(0)
+        slider.valueChanged.connect(self._on_zoom_slider_changed)  # type: ignore[attr-defined]
+        header_layout.addWidget(slider, 1)
+
+        header_layout.addStretch(1)
+        bg_layout.addWidget(header, 0)
+
         scroll = QScrollArea()
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
@@ -231,26 +287,94 @@ class _ZoomOverlay(QWidget):
         c_layout.setContentsMargins(0, 0, 0, 0)
         c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        lbl = _ClickableLabel()
+        lbl = _ZoomImageLabel(self)
+        self._img = lbl
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        pix = QPixmap(image_path)
-        if not pix.isNull():
-            # Original resolution (no scaling). If larger than the screen, user can scroll.
-            lbl.setPixmap(pix)
 
         c_layout.addWidget(lbl)
         scroll.setWidget(container)
         bg_layout.addWidget(scroll, 1)
         root.addWidget(self._bg, 1)
 
+        self._apply_mode()
+
+
+    def _on_zoom_slider_changed(self, value: int) -> None:
+        try:
+            self._zoom_pct = int(value)
+        except Exception:
+            self._zoom_pct = 0
+        self._apply_mode()
+
+
+    def _apply_mode(self) -> None:
+        if not self._img:
+            return
+        if self._pix.isNull():
+            return
+
+        try:
+            if self._zoom_pct <= 0:
+                # Fit to the current scroll viewport (leaving a bit of margin)
+                vp = self._scroll.viewport().size() if self._scroll else self.size()
+                w = max(50, int(vp.width()) - 10)
+                h = max(50, int(vp.height()) - 10)
+                scaled = self._pix.scaled(
+                    w,
+                    h,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._img.setPixmap(scaled)
+                self._img.setCursor(Qt.CursorShape.PointingHandCursor)
+                if self._slider_label is not None:
+                    self._slider_label.setText("Fit")
+                return
+
+            z = float(self._zoom_pct) / 100.0
+            w = max(1, int(self._pix.width() * z))
+            h = max(1, int(self._pix.height() * z))
+            scaled = self._pix.scaled(
+                w,
+                h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._img.setPixmap(scaled)
+            self._img.setCursor(Qt.CursorShape.PointingHandCursor)
+            if self._slider_label is not None:
+                self._slider_label.setText(f"{int(self._zoom_pct)}%")
+        except Exception:
+            # As a safe fallback, show original
+            try:
+                self._img.setPixmap(self._pix)
+            except Exception:
+                pass
+
+
+    def resizeEvent(self, event):  # noqa: N802
+        try:
+            super().resizeEvent(event)
+        except Exception:
+            pass
+        # Keep fit mode responsive to window/viewport changes
+        if self._zoom_pct == 0:
+            try:
+                self._apply_mode()
+            except Exception:
+                pass
+
     def mousePressEvent(self, event):  # noqa: N802
         try:
             event.accept()
         except Exception:
             pass
-        self.close()
+        # Close on click anywhere (no ✕ button)
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def closeEvent(self, event):  # noqa: N802
         try:
@@ -261,6 +385,7 @@ class _ZoomOverlay(QWidget):
 
 
 _popup_singleton: _ImagePopup | None = None
+_fullscreen_singleton: _ZoomOverlay | None = None
 
 
 def show_answer_popup(image_path: str, duration_ms: int, cfg: dict) -> None:
@@ -268,3 +393,25 @@ def show_answer_popup(image_path: str, duration_ms: int, cfg: dict) -> None:
     if _popup_singleton is None:
         _popup_singleton = _ImagePopup()
     _popup_singleton.show_image(image_path, duration_ms, cfg)
+
+
+def show_fullscreen_image(image_path: str) -> None:
+    """Show an image in a fullscreen-ish viewer with zoom slider and ✕ close."""
+    global _fullscreen_singleton
+    try:
+        if _fullscreen_singleton is not None:
+            try:
+                _fullscreen_singleton.close()
+            except Exception:
+                pass
+            _fullscreen_singleton = None
+
+        if not image_path or not os.path.exists(image_path):
+            return
+
+        w = _ZoomOverlay(image_path)
+        _fullscreen_singleton = w
+        w.show()
+        w.raise_()
+    except Exception:
+        return

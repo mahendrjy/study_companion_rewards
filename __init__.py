@@ -29,6 +29,25 @@ from .features import inject_random_image, trigger_answer_submit_popup
 
 def _handle_webview_message(handled, message, context):
     """Handle delete image command from JavaScript."""
+    if isinstance(message, str) and message.startswith("scOpenImage:"):
+        rel = message[len("scOpenImage:") :]
+        try:
+            col = getattr(mw, "col", None)
+            if not col:
+                return (True, None)
+            media_dir = col.media.dir()
+            rel_decoded = urlunquote(str(rel))
+            rel_decoded = rel_decoded.lstrip("/\\")
+            import os
+
+            full_path = os.path.join(media_dir, rel_decoded)
+            from .answer_popup import show_fullscreen_image
+
+            show_fullscreen_image(full_path)
+        except Exception:
+            pass
+        return (True, None)
+
     if isinstance(message, str) and message.startswith("randomImageDelete:"):
         filename = message[len("randomImageDelete:"):]
         cfg = get_config()
