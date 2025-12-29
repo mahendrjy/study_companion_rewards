@@ -68,8 +68,10 @@ def _resolve_side_source(cfg: dict, side: str) -> tuple[str, str]:
         disk_folder = _resolve_existing_folder(raw)
         if disk_folder:
             return "disk", disk_folder
-        # otherwise treat it as a media subfolder name
-        return "media", sanitize_folder_name(raw)
+        # If raw looks like an absolute path but doesn't exist, skip to fallback
+        # instead of treating it as a media subfolder name
+        if not (raw.startswith("/") or raw.startswith("~") or ":" in raw or ".." in raw):
+            return "media", sanitize_folder_name(raw)
 
     # Fallback: legacy per-side media-only keys
     legacy_key = "folder_name_question" if side_l.startswith("q") else "folder_name_answer"
@@ -134,6 +136,10 @@ def _pick_answer_popup_image_file(folder: str, cfg: dict) -> str | None:
     disk_folder = _resolve_existing_folder(folder)
     if disk_folder:
         return _pick_random_image_path_from_folder(disk_folder)
+
+    # If folder looks like an absolute path but doesn't exist, return None
+    if folder.startswith("/") or folder.startswith("~") or ":" in folder or ".." in folder:
+        return None
 
     folder_media = sanitize_folder_name(folder)
     image_folder_path = get_media_subfolder_path(folder_media)
@@ -530,6 +536,9 @@ def queue_answer_submit_popup(ease: int, cfg: dict | None = None) -> None:
                 return
             src = urlquote(rel_media, safe='/')
         else:
+            # If folder looks like an absolute path but doesn't exist, skip
+            if folder.startswith("/") or folder.startswith("~") or ":" in folder or ".." in folder:
+                return
             folder_media = sanitize_folder_name(folder)
 
             # Reuse existing picker by temporarily overriding folder_name

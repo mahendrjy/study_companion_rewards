@@ -642,6 +642,10 @@ class SettingsDialog(QDialog):
             pass
 
         # Otherwise treat it as a collection.media subfolder name.
+        # But only if it doesn't look like an absolute path
+        if folder.startswith("/") or folder.startswith("~") or ":" in folder or ".." in folder:
+            # Absolute path that doesn't exist - do nothing
+            return
         try:
             folder2 = sanitize_folder_name(folder)
             source.setText(folder2)
