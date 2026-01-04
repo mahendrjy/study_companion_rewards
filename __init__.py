@@ -218,3 +218,181 @@ _install_answer_submit_hook()
 gui_hooks.webview_did_receive_js_message.append(_handle_webview_message)
 
 # Behavior/session hooks removed
+
+
+# ============================================================================
+# Override Browser to open card's actual deck (subdeck) instead of parent deck
+# ============================================================================
+
+def _on_browser_will_search(context) -> None:
+    """Hook called when browser is about to search - modify search if from reviewer."""
+    try:
+        # Check if feature is enabled
+        cfg = get_config()
+        if not cfg.get("browser_open_card_deck", True):
+            return
+        
+        # Only apply when reviewing
+        if mw.state != "review" or not mw.reviewer or not mw.reviewer.card:
+            return
+        
+        card = mw.reviewer.card
+        
+        # Get the actual deck name from card.did (this is the subdeck, not parent)
+        deck_name = mw.col.decks.name(card.did)
+        
+        # Modify the search context to use our deck
+        context.search = f'deck:"{deck_name}"'
+    except Exception:
+        pass
+
+
+def _setup_browser_override():
+    """Set up browser override after main window is ready."""
+    try:
+        # Hook into browser search - this is called when browser opens
+        from aqt.browser import Browser
+        
+        # Store the original show method
+        _original_show = Browser._setup_search
+        
+        def _patched_setup_search(browser_self, *args, **kwargs):
+            """Intercept browser search setup to use card's deck."""
+            result = _original_show(browser_self, *args, **kwargs)
+            
+            try:
+                # Check if feature is enabled
+                cfg = get_config()
+                if not cfg.get("browser_open_card_deck", True):
+                    return result
+                
+                # Only apply when reviewing
+                if mw.state != "review" or not mw.reviewer or not mw.reviewer.card:
+                    return result
+                
+                card = mw.reviewer.card
+                
+                # Get the actual deck name from card.did (this is the subdeck, not parent)
+                deck_name = mw.col.decks.name(card.did)
+                
+                # Update the search
+                browser_self.search_for(f'deck:"{deck_name}"')
+            except Exception:
+                pass
+            
+            return result
+        
+        Browser._setup_search = _patched_setup_search
+    except Exception as e:
+        print(f"[StudyCompanion] Failed to setup browser override: {e}")
+
+
+# Override browser opening to use card's subdeck
+def _custom_browse_for_card():
+    """Open browser showing the current card's subdeck."""
+    import aqt
+    
+    try:
+        # Check if feature is enabled
+        cfg = get_config()
+        if not cfg.get("browser_open_card_deck", True):
+            return False  # Let original handler run
+        
+        # Only apply when reviewing
+        if mw.state != "review" or not mw.reviewer or not mw.reviewer.card:
+            return False
+        
+        card = mw.reviewer.card
+        
+        # Get the actual deck name from card.did
+        deck_name = mw.col.decks.name(card.did)
+        
+        # Open browser and search for the deck
+        browser = aqt.dialogs.open("Browser", mw)
+        browser.search_for(f'deck:"{deck_name}"')
+        return True  # Handled
+    except Exception as e:
+        print(f"[StudyCompanion] Error in custom browse: {e}")
+        return False
+
+
+def _patch_reviewer_shortcut():
+    """Patch the reviewer to intercept 'b' key for custom browse."""
+    try:
+        from aqt.reviewer import Reviewer
+        
+        # Patch the _linkHandler which handles all shortcuts including 'b'
+        _original_linkHandler = Reviewer._linkHandler
+        
+        def _patched_linkHandler(self, url):
+            # 'ans' with browse triggers browser - intercept it
+            if url == "ans" or url.startswith("ease"):
+                return _original_linkHandler(self, url)
+            
+            # For other links, check original
+            return _original_linkHandler(self, url)
+        
+        # Alternative: Patch _onBrowse directly on Reviewer if it exists
+        if hasattr(Reviewer, 'onBrowse'):
+            _orig_reviewer_browse = Reviewer.onBrowse
+            def _new_reviewer_browse(self):
+                if not _custom_browse_for_card():
+                    return _orig_reviewer_browse(self)
+            Reviewer.onBrowse = _new_reviewer_browse
+            print("[StudyCompanion] Reviewer.onBrowse patched")
+        
+        print("[StudyCompanion] Browser shortcut override installed")
+    except Exception as e:
+        print(f"[StudyCompanion] Failed to patch reviewer shortcut: {e}")
+
+
+def _patch_mw_onBrowse():
+    """Patch browser opening at multiple levels."""
+    try:
+        import aqt
+        from aqt import dialogs
+        
+        # Patch mw.onBrowse
+        _original_onBrowse = mw.onBrowse
+        
+        def _patched_onBrowse():
+            if _custom_browse_for_card():
+                return  # Our handler opened the browser
+            return _original_onBrowse()
+        
+        mw.onBrowse = _patched_onBrowse
+        print("[StudyCompanion] mw.onBrowse patched")
+        
+        # Patch dialogs.open to intercept Browser opening
+        _original_dialogs_open = dialogs.open
+        
+        def _patched_dialogs_open(name, *args, **kwargs):
+            if name == "Browser":
+                # Check if we're reviewing and should use custom search
+                try:
+                    cfg = get_config()
+                    if cfg.get("browser_open_card_deck", True):
+                        if mw.state == "review" and mw.reviewer and mw.reviewer.card:
+                            card = mw.reviewer.card
+                            deck_name = mw.col.decks.name(card.did)
+                            # Open browser normally first
+                            browser = _original_dialogs_open(name, *args, **kwargs)
+                            # Then search for the deck
+                            browser.search_for(f'deck:"{deck_name}"')
+                            return browser
+                except Exception as e:
+                    print(f"[StudyCompanion] dialogs.open patch error: {e}")
+            return _original_dialogs_open(name, *args, **kwargs)
+        
+        dialogs.open = _patched_dialogs_open
+        print("[StudyCompanion] dialogs.open patched")
+        
+    except Exception as e:
+        print(f"[StudyCompanion] Failed to patch onBrowse: {e}")
+
+
+# Register to patch after main window init
+gui_hooks.main_window_did_init.append(_patch_mw_onBrowse)
+
+# Setup browser override
+_setup_browser_override()

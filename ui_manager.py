@@ -405,6 +405,30 @@ class SettingsDialog(QDialog):
 
         qconnect(self.btn_audio_folder.clicked, self._browse_audio_folder)
 
+        # Other Features tab
+        tab_other = QWidget()
+        tabs.addTab(tab_other, "Other Features")
+        other_layout = QVBoxLayout(tab_other)
+        other_form = QFormLayout()
+        other_layout.addLayout(other_form)
+
+        other_section = QLabel("<b>Browser Behavior</b>")
+        other_section.setWordWrap(True)
+        other_form.addRow(other_section)
+
+        self.cb_browser_open_card_deck = QCheckBox("Open browser to card's subdeck (instead of parent deck)")
+        self.cb_browser_open_card_deck.setChecked(bool(self.cfg.get("browser_open_card_deck", True)))
+        other_form.addRow(self.cb_browser_open_card_deck)
+
+        browser_note = QLabel(
+            "When enabled, pressing 'B' during review will open the browser showing "
+            "the card's actual subdeck, not the parent deck you're reviewing."
+        )
+        browser_note.setWordWrap(True)
+        other_form.addRow(browser_note)
+
+        other_layout.addStretch(1)
+
         # Quotes tab
         tab_quotes = QWidget()
         tabs.addTab(tab_quotes, "Quotes")
@@ -583,6 +607,7 @@ class SettingsDialog(QDialog):
                 "quotes_italic": bool(self.cb_quote_italic.isChecked()),
                 "quotes_align": str(self.cb_quote_align.currentData() or "left"),
                 "audio_volume": int(self.sl_volume.value()),
+                "browser_open_card_deck": bool(self.cb_browser_open_card_deck.isChecked()),
             }
         )
 
@@ -714,6 +739,9 @@ class SettingsDialog(QDialog):
         self.lbl_volume.setText(f"{int(self.sl_volume.value())} %")
         self.le_audio_source.setText("")
         self.cb_audio_loop.setChecked(bool(d.get("audio_loop_1", False) or d.get("audio_loop_playlist", False)))
+
+        # Other Features
+        self.cb_browser_open_card_deck.setChecked(bool(d.get("browser_open_card_deck", True)))
 
     # Quotes UI handlers
     def _load_quotes_ui(self):

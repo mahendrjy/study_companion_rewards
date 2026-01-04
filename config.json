@@ -13,6 +13,7 @@
     "website_display_mode": "mobile",
     "website_width_percent": 100,
     "audio_file_path": "",
-    "audio_volume": 50
+    "audio_volume": 50,
+    "browser_open_card_deck": true
 }
   
