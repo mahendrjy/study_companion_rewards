@@ -51,11 +51,36 @@ def get_defaults() -> dict:
         "audio_file_path": "",
         "audio_playlist": [],
         "audio_loop_playlist": False,
-        # Single playlist (file or folder source)
-        "audio_playlist_1": [],
-        "audio_playlist_1_path": "",
-        "audio_loop_1": False,
         "audio_volume": 50,
+        
+        # Multi-playlist system (3 playlists with day-based rotation)
+        # Playlist 1: plays every day (loops forever)
+        # Playlist 2: plays on odd days 1,5,9,13,17,21,25,29 (no loop)
+        # Playlist 3: plays on odd days 3,7,11,15,19,23,27 (no loop)
+        # Even days: only Playlist 1
+        "audio_playlist_1_path": "",
+        "audio_playlist_2_path": "",
+        "audio_playlist_3_path": "",
+        "audio_loop_1": True,  # Playlist 1 loops forever (default)
+        "audio_loop_2": False,  # Playlist 2 does not loop
+        "audio_loop_3": False,  # Playlist 3 does not loop
+        "audio_playlist_1_enabled": True,
+        "audio_playlist_2_enabled": True,
+        "audio_playlist_3_enabled": True,
+        # Track position for resume (index within each playlist)
+        "audio_track_position_1": 0,
+        "audio_track_position_2": 0,
+        "audio_track_position_3": 0,
+        # Manual override (persistent until changed)
+        "audio_playlist_override_enabled": False,
+        "audio_playlist_override_day": 1,  # 1-31
+        # Show notifications when playlist changes
+        "audio_show_notifications": True,
+        # 21-day study cycle with 5-day break
+        # Format: "YYYY-MM-DD" or empty string
+        "audio_cycle_start_date": "",
+        "audio_cycle_study_days": 21,  # Days of study in each cycle
+        "audio_cycle_break_days": 5,   # Days of break after study
         # Orientation-aware single-image display
         "auto_orient_single_image": True,
 

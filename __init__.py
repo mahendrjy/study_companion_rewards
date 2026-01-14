@@ -5,7 +5,8 @@ Features:
 - Display random images during reviews
 - Show motivational quotes
 - Optional website embedding (desktop/mobile modes)
-- Background audio playback
+- Background audio playback with 3-playlist day-based rotation
+- Playlist calendar widget
 - Flexible configuration
 
 Main entry point that registers hooks and initializes the add-on.
@@ -24,7 +25,7 @@ from .image_manager import (
 from urllib.parse import unquote as urlunquote
 from .image_manager import _load_meta, _save_meta
 from .ui_manager import register_config_action, register_tools_menu
-from .audio_manager import setup_audio_player
+from .audio_manager import setup_audio_player, cleanup_audio_on_quit
 from .features import inject_random_image, trigger_answer_submit_popup
 
 
@@ -207,6 +208,9 @@ def _install_answer_submit_hook() -> None:
 
 # Initialize when main window is ready
 gui_hooks.main_window_did_init.append(_on_main_window_init)
+
+# Cleanup audio when Anki quits (CRITICAL: prevent orphaned processes)
+gui_hooks.profile_will_close.append(cleanup_audio_on_quit)
 
 # Inject images/quotes/website into card display
 gui_hooks.card_will_show.append(inject_random_image)

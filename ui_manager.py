@@ -391,19 +391,153 @@ class SettingsDialog(QDialog):
         vol_row_l.addWidget(self.lbl_volume)
         audio_form.addRow("Audio volume", vol_row)
 
-        self.le_audio_source = QLineEdit()
-        self.btn_audio_folder = QPushButton("Folder…")
-        self.cb_audio_loop = QCheckBox("Loop all day")
+        # Notifications toggle
+        self.cb_audio_notifications = QCheckBox("Show macOS notifications when playlist changes")
+        self.cb_audio_notifications.setChecked(bool(self.cfg.get("audio_show_notifications", True)))
+        audio_form.addRow(self.cb_audio_notifications)
 
-        src_row = QWidget()
-        src_row_l = QHBoxLayout(src_row)
-        src_row_l.setContentsMargins(0, 0, 0, 0)
-        src_row_l.addWidget(self.le_audio_source, 1)
-        src_row_l.addWidget(self.btn_audio_folder)
-        audio_form.addRow("Playlist source", src_row)
-        audio_form.addRow("Loop", self.cb_audio_loop)
+        # Day-based rotation info
+        from .audio_manager import get_current_day, get_effective_day, get_playlists_for_day
+        current_day = get_current_day()
+        effective_day = get_effective_day(self.cfg)
+        playlists_today = get_playlists_for_day(effective_day)
+        
+        playlist_desc = []
+        for pid, loops in playlists_today:
+            suffix = " (loops)" if loops else ""
+            playlist_desc.append(f"P{pid}{suffix}")
+        
+        day_info = QLabel(f"<b>📅 Today is Day {current_day}</b> → Active: {' → '.join(playlist_desc)}")
+        day_info.setWordWrap(True)
+        audio_form.addRow(day_info)
+        
+        # Day-based rotation explanation
+        rotation_info = QLabel(
+            "<small>• P1: Every day (loops) | P2: Days 1,5,9,13,17,21,25,29 | P3: Days 3,7,11,15,19,23,27,31<br>"
+            "• Even days: Only P1 | Non-looping plays first, then looping</small>"
+        )
+        rotation_info.setWordWrap(True)
+        audio_form.addRow(rotation_info)
 
-        qconnect(self.btn_audio_folder.clicked, self._browse_audio_folder)
+        # === Playlist 1 (plays every day, loops) ===
+        p1_section = QLabel("<b>🎵 Playlist 1</b> — Plays every day (loops)")
+        p1_section.setWordWrap(True)
+        audio_form.addRow(p1_section)
+
+        self.cb_playlist_1_enabled = QCheckBox("Enable Playlist 1")
+        self.cb_playlist_1_enabled.setChecked(bool(self.cfg.get("audio_playlist_1_enabled", True)))
+        audio_form.addRow(self.cb_playlist_1_enabled)
+
+        self.le_playlist_1_path = QLineEdit(str(self.cfg.get("audio_playlist_1_path", "") or ""))
+        self.le_playlist_1_path.setPlaceholderText("Select folder with audio files...")
+        btn_pick_p1 = QPushButton("Select Folder…")
+        qconnect(btn_pick_p1.clicked, lambda: self._browse_playlist_folder(self.le_playlist_1_path))
+        p1_row = QWidget()
+        p1_row_l = QHBoxLayout(p1_row)
+        p1_row_l.setContentsMargins(0, 0, 0, 0)
+        p1_row_l.addWidget(self.le_playlist_1_path, 1)
+        p1_row_l.addWidget(btn_pick_p1)
+        audio_form.addRow("Folder", p1_row)
+
+        self.cb_loop_1 = QCheckBox("Loop forever (recommended for P1)")
+        self.cb_loop_1.setChecked(bool(self.cfg.get("audio_loop_1", True)))
+        audio_form.addRow(self.cb_loop_1)
+
+        # === Playlist 2 (odd days: 1,5,9,13,17,21,25,29) ===
+        p2_section = QLabel("<b>🎵 Playlist 2</b> — Days 1, 5, 9, 13, 17, 21, 25, 29")
+        p2_section.setWordWrap(True)
+        audio_form.addRow(p2_section)
+
+        self.cb_playlist_2_enabled = QCheckBox("Enable Playlist 2")
+        self.cb_playlist_2_enabled.setChecked(bool(self.cfg.get("audio_playlist_2_enabled", True)))
+        audio_form.addRow(self.cb_playlist_2_enabled)
+
+        self.le_playlist_2_path = QLineEdit(str(self.cfg.get("audio_playlist_2_path", "") or ""))
+        self.le_playlist_2_path.setPlaceholderText("Select folder with audio files...")
+        btn_pick_p2 = QPushButton("Select Folder…")
+        qconnect(btn_pick_p2.clicked, lambda: self._browse_playlist_folder(self.le_playlist_2_path))
+        p2_row = QWidget()
+        p2_row_l = QHBoxLayout(p2_row)
+        p2_row_l.setContentsMargins(0, 0, 0, 0)
+        p2_row_l.addWidget(self.le_playlist_2_path, 1)
+        p2_row_l.addWidget(btn_pick_p2)
+        audio_form.addRow("Folder", p2_row)
+
+        self.cb_loop_2 = QCheckBox("Loop (not recommended)")
+        self.cb_loop_2.setChecked(bool(self.cfg.get("audio_loop_2", False)))
+        audio_form.addRow(self.cb_loop_2)
+
+        # === Playlist 3 (odd days: 3,7,11,15,19,23,27,31) ===
+        p3_section = QLabel("<b>🎵 Playlist 3</b> — Days 3, 7, 11, 15, 19, 23, 27, 31")
+        p3_section.setWordWrap(True)
+        audio_form.addRow(p3_section)
+
+        self.cb_playlist_3_enabled = QCheckBox("Enable Playlist 3")
+        self.cb_playlist_3_enabled.setChecked(bool(self.cfg.get("audio_playlist_3_enabled", True)))
+        audio_form.addRow(self.cb_playlist_3_enabled)
+
+        self.le_playlist_3_path = QLineEdit(str(self.cfg.get("audio_playlist_3_path", "") or ""))
+        self.le_playlist_3_path.setPlaceholderText("Select folder with audio files...")
+        btn_pick_p3 = QPushButton("Select Folder…")
+        qconnect(btn_pick_p3.clicked, lambda: self._browse_playlist_folder(self.le_playlist_3_path))
+        p3_row = QWidget()
+        p3_row_l = QHBoxLayout(p3_row)
+        p3_row_l.setContentsMargins(0, 0, 0, 0)
+        p3_row_l.addWidget(self.le_playlist_3_path, 1)
+        p3_row_l.addWidget(btn_pick_p3)
+        audio_form.addRow("Folder", p3_row)
+
+        self.cb_loop_3 = QCheckBox("Loop (not recommended)")
+        self.cb_loop_3.setChecked(bool(self.cfg.get("audio_loop_3", False)))
+        audio_form.addRow(self.cb_loop_3)
+
+        # === Manual Override Section ===
+        override_section = QLabel("<b>⚙️ Manual Override</b>")
+        override_section.setWordWrap(True)
+        audio_form.addRow(override_section)
+
+        self.cb_override_enabled = QCheckBox("Override day (persistent until disabled)")
+        self.cb_override_enabled.setChecked(bool(self.cfg.get("audio_playlist_override_enabled", False)))
+        audio_form.addRow(self.cb_override_enabled)
+
+        self.sp_override_day = QSpinBox()
+        self.sp_override_day.setRange(1, 31)
+        self.sp_override_day.setValue(int(self.cfg.get("audio_playlist_override_day", 1) or 1))
+        self.sp_override_day.setEnabled(self.cb_override_enabled.isChecked())
+        qconnect(self.cb_override_enabled.toggled, lambda checked: self.sp_override_day.setEnabled(checked))
+        audio_form.addRow("Override to day", self.sp_override_day)
+
+        override_note = QLabel("<small>Use this to test playlists for different days.</small>")
+        override_note.setWordWrap(True)
+        audio_form.addRow(override_note)
+
+        # === Cycle Settings Section ===
+        cycle_section = QLabel("<b>📆 Study Cycle (21 days study + 5 days break)</b>")
+        cycle_section.setWordWrap(True)
+        audio_form.addRow(cycle_section)
+
+        # Cycle start date
+        self.le_cycle_start_date = QLineEdit(str(self.cfg.get("audio_cycle_start_date", "") or ""))
+        self.le_cycle_start_date.setPlaceholderText("YYYY-MM-DD (e.g., 2026-01-14)")
+        btn_pick_date = QPushButton("Today")
+        qconnect(btn_pick_date.clicked, self._set_cycle_start_today)
+        btn_clear_date = QPushButton("Clear")
+        qconnect(btn_clear_date.clicked, lambda: self.le_cycle_start_date.clear())
+        
+        date_row = QWidget()
+        date_row_l = QHBoxLayout(date_row)
+        date_row_l.setContentsMargins(0, 0, 0, 0)
+        date_row_l.addWidget(self.le_cycle_start_date, 1)
+        date_row_l.addWidget(btn_pick_date)
+        date_row_l.addWidget(btn_clear_date)
+        audio_form.addRow("Cycle Start Date", date_row)
+
+        cycle_note = QLabel(
+            "<small>Set when your study cycle begins. After 21 study days, "
+            "you'll get 5 break days (no audio). Leave empty to use calendar day.</small>"
+        )
+        cycle_note.setWordWrap(True)
+        audio_form.addRow(cycle_note)
 
         # Other Features tab
         tab_other = QWidget()
@@ -536,21 +670,52 @@ class SettingsDialog(QDialog):
         self.sl_volume.setValue(int(cfg.get("audio_volume", 50) or 50))
         self.lbl_volume.setText(f"{int(self.sl_volume.value())} %")
 
-        val = str(cfg.get("audio_playlist_1_path", "") or "").strip()
-        if not val:
-            val = str(cfg.get("audio_file_path", "") or "").strip()
-        self.le_audio_source.setText(val)
-        self.cb_audio_loop.setChecked(bool(cfg.get("audio_loop_1", False) or cfg.get("audio_loop_playlist", False)))
+        # Playlist settings (new 3-playlist system)
+        self.cb_audio_notifications.setChecked(bool(cfg.get("audio_show_notifications", True)))
+        
+        self.cb_playlist_1_enabled.setChecked(bool(cfg.get("audio_playlist_1_enabled", True)))
+        self.le_playlist_1_path.setText(str(cfg.get("audio_playlist_1_path", "") or ""))
+        self.cb_loop_1.setChecked(bool(cfg.get("audio_loop_1", True)))
+        
+        self.cb_playlist_2_enabled.setChecked(bool(cfg.get("audio_playlist_2_enabled", True)))
+        self.le_playlist_2_path.setText(str(cfg.get("audio_playlist_2_path", "") or ""))
+        self.cb_loop_2.setChecked(bool(cfg.get("audio_loop_2", False)))
+        
+        self.cb_playlist_3_enabled.setChecked(bool(cfg.get("audio_playlist_3_enabled", True)))
+        self.le_playlist_3_path.setText(str(cfg.get("audio_playlist_3_path", "") or ""))
+        self.cb_loop_3.setChecked(bool(cfg.get("audio_loop_3", False)))
+        
+        self.cb_override_enabled.setChecked(bool(cfg.get("audio_playlist_override_enabled", False)))
+        self.sp_override_day.setValue(int(cfg.get("audio_playlist_override_day", 1) or 1))
+        self.sp_override_day.setEnabled(self.cb_override_enabled.isChecked())
+        
+        # Cycle settings
+        self.le_cycle_start_date.setText(str(cfg.get("audio_cycle_start_date", "") or ""))
 
-    def _browse_audio_folder(self) -> None:
+    def _set_cycle_start_today(self) -> None:
+        """Set cycle start date to today."""
+        from datetime import date
+        self.le_cycle_start_date.setText(date.today().strftime("%Y-%m-%d"))
+
+    def _browse_playlist_folder(self, target: QLineEdit) -> None:
+        """Browse for a playlist folder."""
         try:
+            start = os.path.expanduser("~")
+            current = str(target.text() or "").strip()
+            if current:
+                try:
+                    expanded = os.path.expanduser(current)
+                    if os.path.isdir(expanded):
+                        start = expanded
+                except Exception:
+                    pass
             folder = QFileDialog.getExistingDirectory(
                 self,
                 "Select folder for playlist",
-                os.path.expanduser("~"),
+                start,
             )
             if folder:
-                self.le_audio_source.setText(folder)
+                target.setText(folder)
         except Exception:
             pass
 
@@ -608,20 +773,23 @@ class SettingsDialog(QDialog):
                 "quotes_align": str(self.cb_quote_align.currentData() or "left"),
                 "audio_volume": int(self.sl_volume.value()),
                 "browser_open_card_deck": bool(self.cb_browser_open_card_deck.isChecked()),
+                # 3-Playlist system
+                "audio_show_notifications": bool(self.cb_audio_notifications.isChecked()),
+                "audio_playlist_1_enabled": bool(self.cb_playlist_1_enabled.isChecked()),
+                "audio_playlist_1_path": str(self.le_playlist_1_path.text() or "").strip(),
+                "audio_loop_1": bool(self.cb_loop_1.isChecked()),
+                "audio_playlist_2_enabled": bool(self.cb_playlist_2_enabled.isChecked()),
+                "audio_playlist_2_path": str(self.le_playlist_2_path.text() or "").strip(),
+                "audio_loop_2": bool(self.cb_loop_2.isChecked()),
+                "audio_playlist_3_enabled": bool(self.cb_playlist_3_enabled.isChecked()),
+                "audio_playlist_3_path": str(self.le_playlist_3_path.text() or "").strip(),
+                "audio_loop_3": bool(self.cb_loop_3.isChecked()),
+                "audio_playlist_override_enabled": bool(self.cb_override_enabled.isChecked()),
+                "audio_playlist_override_day": int(self.sp_override_day.value()),
+                # Cycle settings
+                "audio_cycle_start_date": str(self.le_cycle_start_date.text() or "").strip(),
             }
         )
-
-        cfg["audio_playlist_1_path"] = str(self.le_audio_source.text() or "").strip()
-        cfg["audio_loop_1"] = bool(self.cb_audio_loop.isChecked())
-
-        # Explicitly disable/clear removed Playlist 2 + schedule/cycle settings if they exist.
-        cfg["audio_playlist_2_path"] = ""
-        cfg["audio_loop_2"] = False
-        cfg["audio_program_enabled"] = False
-        cfg["audio_cycle_enabled"] = False
-        cfg["audio_cycle_day"] = 1
-        cfg["audio_cycle_count"] = 0
-        cfg["audio_cycle_last_date"] = ""
 
         write_config(cfg)
         try:
@@ -734,11 +902,29 @@ class SettingsDialog(QDialog):
                 self.cb_quote_align.setCurrentIndex(i)
                 break
 
-        # Audio
+        # Audio (3-playlist system)
         self.sl_volume.setValue(int(d.get("audio_volume", 50) or 50))
         self.lbl_volume.setText(f"{int(self.sl_volume.value())} %")
-        self.le_audio_source.setText("")
-        self.cb_audio_loop.setChecked(bool(d.get("audio_loop_1", False) or d.get("audio_loop_playlist", False)))
+        self.cb_audio_notifications.setChecked(bool(d.get("audio_show_notifications", True)))
+        
+        self.cb_playlist_1_enabled.setChecked(bool(d.get("audio_playlist_1_enabled", True)))
+        self.le_playlist_1_path.setText(str(d.get("audio_playlist_1_path", "") or ""))
+        self.cb_loop_1.setChecked(bool(d.get("audio_loop_1", True)))
+        
+        self.cb_playlist_2_enabled.setChecked(bool(d.get("audio_playlist_2_enabled", True)))
+        self.le_playlist_2_path.setText(str(d.get("audio_playlist_2_path", "") or ""))
+        self.cb_loop_2.setChecked(bool(d.get("audio_loop_2", False)))
+        
+        self.cb_playlist_3_enabled.setChecked(bool(d.get("audio_playlist_3_enabled", True)))
+        self.le_playlist_3_path.setText(str(d.get("audio_playlist_3_path", "") or ""))
+        self.cb_loop_3.setChecked(bool(d.get("audio_loop_3", False)))
+        
+        self.cb_override_enabled.setChecked(bool(d.get("audio_playlist_override_enabled", False)))
+        self.sp_override_day.setValue(int(d.get("audio_playlist_override_day", 1) or 1))
+        self.sp_override_day.setEnabled(False)
+        
+        # Cycle settings
+        self.le_cycle_start_date.setText(str(d.get("audio_cycle_start_date", "") or ""))
 
         # Other Features
         self.cb_browser_open_card_deck.setChecked(bool(d.get("browser_open_card_deck", True)))
@@ -812,16 +998,43 @@ def register_config_action() -> None:
             pass
 
 
+_CALENDAR_ACTION_OBJECT_NAME = "studycompanion_calendar_action_v1"
+
+
+def _has_calendar_action(menu) -> bool:
+    """Check if calendar action already exists in menu."""
+    for act in menu.actions():
+        try:
+            if act.objectName() == _CALENDAR_ACTION_OBJECT_NAME:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def register_tools_menu() -> None:
     try:
         menu = _tools_menu()
-        if menu and not _has_tools_action(menu):
-            action = QAction("StudyCompanion Settings…", mw)
-            try:
-                action.setObjectName(_TOOLS_ACTION_OBJECT_NAME)
-            except Exception:
-                pass
-            qconnect(action.triggered, show_settings)
-            menu.addAction(action)
+        if menu:
+            # Add settings action
+            if not _has_tools_action(menu):
+                action = QAction("StudyCompanion Settings…", mw)
+                try:
+                    action.setObjectName(_TOOLS_ACTION_OBJECT_NAME)
+                except Exception:
+                    pass
+                qconnect(action.triggered, show_settings)
+                menu.addAction(action)
+            
+            # Add calendar action
+            if not _has_calendar_action(menu):
+                from .playlist_calendar import show_calendar_dialog
+                cal_action = QAction("🎵 Playlist Calendar…", mw)
+                try:
+                    cal_action.setObjectName(_CALENDAR_ACTION_OBJECT_NAME)
+                except Exception:
+                    pass
+                qconnect(cal_action.triggered, show_calendar_dialog)
+                menu.addAction(cal_action)
     except Exception:
         pass
